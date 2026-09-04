@@ -62,6 +62,10 @@ let roster: RosterCategories | null = null
 let rosterLoading = false
 let schedules: ScheduledJob[] = []
 let schedulesLoading = false
+// Home screen's own quiet awareness of live scheduled agents — checked once
+// per app load, doesn't block first paint, doesn't nag if the backend's
+// simply not running (that's expected for most visits and not an error).
+let homeScheduleCheckDone = false
 let scheduleBusy = false
 let scheduleError = ''
 let scheduleFormRole = ''
@@ -240,6 +244,9 @@ function renderHome(): string {
   const returning = a && s.lastVisit > 0
 
   if (returning) {
+    if (!homeScheduleCheckDone) void checkHomeSchedules()
+    const liveCount = schedules.length
+
     return `<section class="screen home-return">
       <div class="eyebrow">WELCOME BACK${away > 0 ? ` · ${away} DAY${away === 1 ? '' : 'S'} AWAY` : ''}</div>
       <h1>${a!.bestShiftLength > 0 ? `Beat your best:<br><em>${a!.bestShiftLength} in a row.</em>` : `Your agent is<br><em>still running.</em>`}</h1>
@@ -248,6 +255,7 @@ function renderHome(): string {
         <button class="home-card accent" data-action="to-simulate"><span class="hc-k">SHIFT</span><strong>${a!.bestShiftLength > 0 ? `Beat ${a!.bestShiftLength}` : 'Start a shift'}</strong><p>Chained scenarios, no detour — one wrong call ends it.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-evolve"><span class="hc-k">EVOLVE</span><strong>Review the evidence</strong><p>See every accepted edit, with before/after and regression checks.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-choose"><span class="hc-k">EXPAND</span><strong>Build a second agent</strong><p>${s.unlockedPatterns.length} loop${s.unlockedPatterns.length === 1 ? '' : 's'} unlocked. New ones open as you go.</p><span class="hc-go">→</span></button>
+        <button class="home-card ${liveCount ? 'accent' : ''}" data-action="to-team"><span class="hc-k">TEAM</span><strong>${liveCount ? `${liveCount} agent${liveCount === 1 ? '' : 's'} running` : 'Spawn a real team'}</strong><p>${liveCount ? 'Real scheduled agents, live in the backend right now.' : '25 real agents across 8 categories — LLM calls, real search, real computation.'}</p><span class="hc-go">→</span></button>
       </div>
     </section>`
   }
@@ -359,7 +367,7 @@ function renderDecode(): string {
         .join('')}</div>
       <button class="primary-action ${diagnosis ? '' : 'disabled'}" data-action="to-build">Take this into the build step <span>→</span></button>
     </div>
-    <button class="ghost-link team-entry" data-action="to-team">🐍 Or spawn a real multi-agent team for this pattern (separate Python backend) →</button>
+    <button class="ghost-link team-entry" data-action="to-team">Or skip ahead — assemble a real team of specialist agents for this pattern right now →</button>
   </section>`
 }
 
@@ -729,8 +737,17 @@ function renderTeam(): string {
 
   const backendState = knownBackendState()
   const agentCount = roster ? Object.values(roster).reduce((n, list) => n + list.length, 0) : null
+  const activeAgent = store.activeAgent()
 
   return `<section class="screen team-screen">
+    <div class="team-nav">
+      <button class="ghost-link" data-action="home">← Home</button>
+      ${activeAgent
+        ? `<button class="ghost-link" data-action="to-simulate">Back to the simulator →</button>`
+        : diagnosis
+          ? `<button class="ghost-link" data-action="to-build">Continue to building the rule →</button>`
+          : ''}
+    </div>
     <div class="eyebrow">REAL AGENTS · SEPARATE PYTHON BACKEND</div>
     <h2>A real<br><em>team of agents.</em></h2>
     <p class="lede">This calls an actual FastAPI process running on your machine — not a browser simulation.${agentCount ? ` <b>${agentCount} real agents</b> across ${Object.keys(roster!).length} categories are live right now — LLM calls, real web search, and real local computation (pandas, sklearn, sandboxed code execution) mixed freely.` : ''}</p>
@@ -792,6 +809,7 @@ function renderTeamResult(result: OrchestrationResult): string {
           ${category ? `<span class="team-card-category">${esc(category)}</span>` : ''}
           <p class="team-card-role">${esc(a.role)}</p>
           ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>`}
+          ${!a.error && role ? `<button class="ghost-link team-card-schedule" data-action="team-schedule-this" data-role="${esc(role)}">Keep this one running →</button>` : ''}
         </div>
       `}).join('')}
     </div>
@@ -903,6 +921,24 @@ async function loadSchedules() {
     schedulesLoading = false
     render()
   }
+}
+
+/**
+ * Home's own quiet check for live scheduled agents — runs once per app
+ * load, regardless of which screen the user takes to get to Team (or
+ * whether they ever go there at all). A backend that isn't running is the
+ * common case, not an error: fails silently and just shows the "spawn a
+ * real team" framing instead of a live count.
+ */
+async function checkHomeSchedules() {
+  homeScheduleCheckDone = true
+  try {
+    const up = await isBackendUp()
+    if (up) schedules = await listSchedules()
+  } catch {
+    /* backend not running — expected, home just shows the non-live framing */
+  }
+  render()
 }
 
 // ---------------------------------------------------------------- EVOLVE (evidence-gated)
@@ -1344,6 +1380,13 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'team-tab-spawn') { teamTab = 'spawn'; render(); return }
   if (action === 'team-tab-schedule') { teamTab = 'schedule'; render(); return }
+  if (action === 'team-schedule-this') {
+    const role = actionEl?.dataset.role
+    if (role) scheduleFormRole = role
+    teamTab = 'schedule'
+    render()
+    return
+  }
   if (action === 'schedule-create') { await doCreateSchedule(); return }
   if (action === 'schedule-resume') {
     const id = actionEl?.dataset.id

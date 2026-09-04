@@ -358,6 +358,9 @@ h1, h2, h3, p { margin: 0; }
 .team-card-output-error { color: var(--bad); }
 @media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
 .team-card-category { display: inline-block; margin-top: 8px; font: 10px 'DM Mono'; color: var(--lime); text-transform: uppercase; letter-spacing: .04em; }
+.team-card-schedule { display: block; margin-top: 10px; font-size: 11.5px; }
+.team-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.team-nav .ghost-link { font-size: 12px; }
 .lede.small { font-size: 12.5px; margin-top: 10px; }
 
 .team-tabs { display: flex; gap: 8px; margin-top: 24px; border-bottom: 1px solid #34342e; }
