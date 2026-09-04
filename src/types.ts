@@ -124,6 +124,8 @@ export type ScenarioRun = {
   scenarioId: string
   agentVersion: number
   userPredictedFire: boolean
+  /** Whether the learner predicted the deterministic engine result correctly. */
+  predictionCorrect?: boolean
   trace: MatchTrace
   predictionResult: PredictionResult
 }

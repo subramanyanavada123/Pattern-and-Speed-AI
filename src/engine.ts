@@ -46,6 +46,12 @@ export function scorePrediction(trace: MatchTrace, userPredictedFire: boolean): 
   return trace.fired ? 'over-fired' : 'missed'
 }
 
+/** Score the agent against the scenario's authored ground truth, not the learner's guess. */
+export function scoreAgent(trace: MatchTrace, expectedFire: boolean): PredictionResult {
+  if (trace.fired === expectedFire) return 'correct'
+  return trace.fired ? 'over-fired' : 'missed'
+}
+
 /** Run a rule set against every scenario in a list — used for regression replay. */
 export function replayAll(rules: RuleSet, scenarios: Scenario[]): { scenario: Scenario; trace: MatchTrace }[] {
   return scenarios.map((scenario) => ({ scenario, trace: matchScenario(rules, scenario) }))

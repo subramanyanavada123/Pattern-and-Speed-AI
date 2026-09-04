@@ -75,6 +75,13 @@ function migrateFromV2(): { save: SaveState; migratedFromV2: boolean } {
       sawMigrationNotice: false,
     }
     write(SAVE_KEY, migrated)
+    // The portable fields are now safely inside the v3 save — remove the old
+    // key so it doesn't sit around indefinitely as dead, confusing state.
+    try {
+      localStorage.removeItem(OLD_SAVE_KEY)
+    } catch {
+      /* noop */
+    }
     return { save: migrated, migratedFromV2: true }
   } catch {
     return { save: fresh, migratedFromV2: false }
@@ -167,6 +174,11 @@ export const store = {
   reset() {
     state = blankSave()
     persist()
+    try {
+      localStorage.removeItem(OLD_SAVE_KEY)
+    } catch {
+      /* noop */
+    }
   },
 
   markMigrationNoticeSeen() {
@@ -224,7 +236,7 @@ export const store = {
     agent.scenarioLog.push(run)
     agent.updatedAt = Date.now()
     state.agents[agent.patternId] = agent
-    state.xp += run.predictionResult === 'correct' ? 15 : 5
+    state.xp += run.predictionCorrect ? 15 : 5
     persist()
     return agent
   },

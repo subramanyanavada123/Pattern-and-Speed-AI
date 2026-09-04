@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { evaluateCondition, matchScenario, scorePrediction, checkRegression, isValidRuleSet, isValidScenario, formatClock, describeCondition } from './engine'
+import { evaluateCondition, matchScenario, scorePrediction, scoreAgent, checkRegression, isValidRuleSet, isValidScenario, formatClock, describeCondition } from './engine'
 import type { Condition, RuleSet, Scenario, FlagSpec, ActionSpec } from './types'
 
 function scenario(overrides: Partial<Scenario> = {}): Scenario {
@@ -108,6 +108,18 @@ describe('scorePrediction', () => {
   })
   it('is over-fired when engine fired but user predicted no-fire', () => {
     expect(scorePrediction({ conditions: [], exceptions: [], fired: true, actionId: 'a' }, false)).toBe('over-fired')
+  })
+})
+
+describe('scoreAgent', () => {
+  it('scores the agent against scenario ground truth, even when the learner predicted it correctly', () => {
+    const overFiringTrace = { conditions: [], exceptions: [], fired: true, actionId: 'a' }
+    expect(scoreAgent(overFiringTrace, false)).toBe('over-fired')
+  })
+
+  it('marks a correctly firing agent as correct against ground truth', () => {
+    const firingTrace = { conditions: [], exceptions: [], fired: true, actionId: 'a' }
+    expect(scoreAgent(firingTrace, true)).toBe('correct')
   })
 })
 

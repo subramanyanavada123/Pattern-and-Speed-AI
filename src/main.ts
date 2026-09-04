@@ -6,7 +6,7 @@ import { critique, reply } from './coach'
 import { runScenario, proposeStressScenario, pickNextScenario, type NarratedResult } from './simulator'
 import { proposeEvolution, predictionMeta } from './evolve'
 import { testKey, listModels, type ModelInfo } from './mistral'
-import { scorePrediction, describeCondition, formatClock } from './engine'
+import { scoreAgent, describeCondition, formatClock } from './engine'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -35,6 +35,8 @@ let modelsError = ''
 let evolving = false
 let abort: AbortController | null = null
 let migrationBannerDismissed = false
+/** Two-step confirm for "Start fresh" in Settings — one click arms it, a second within the same modal session confirms. */
+let resetArmed = false
 
 // ---- simulate (predict / reveal / compare / repair / replay) ----
 type SimPhase = 'predicting' | 'revealed'
@@ -74,6 +76,20 @@ function go(next: Phase) {
   phase = next
   window.scrollTo({ top: 0, behavior: 'smooth' })
   render()
+}
+
+/**
+ * `workingPatternId` is only ever explicitly set when a pattern card is
+ * clicked in Choose. Every other entry into Simulate/Evolve (in particular
+ * Home's "Welcome back" cards) must resync it to whichever pattern the
+ * user's actual active agent belongs to — otherwise a stale value from a
+ * previous Choose visit makes every downstream screen render one pattern's
+ * scenarios/flags/actions against a completely different pattern's saved
+ * rules: the scenario says "gym bag", the trace narrates "message reply".
+ */
+function syncWorkingPatternToActiveAgent() {
+  const active = store.activeAgent()
+  if (active) workingPatternId = active.patternId
 }
 
 /** Scenario ids the active agent has run where the deterministic verdict matched the scenario's ground truth. */
@@ -400,8 +416,12 @@ function renderRuleEditor(p: ReturnType<typeof getPattern>, emphasis: DiagnosisI
 
 function renderSimulate(): string {
   const a = store.activeAgent() ?? draftAgent
-  const p = getPattern(workingPatternId)
   if (!a) return `<section class="screen"><p class="lede">Build an agent first.</p><button class="primary-action" data-action="to-choose">Start →</button></section>`
+  // Derive the pattern from the AGENT being shown, not the independently-tracked
+  // workingPatternId — that global can go stale (e.g. arriving here from Home's
+  // "Welcome back" cards) and would otherwise render one pattern's scenarios
+  // against a completely different pattern's actual rules.
+  const p = getPattern(a.patternId)
 
   if (!currentScenario) {
     currentScenario = pickNextScenario(p, new Set(a.scenarioLog.map((r) => r.scenarioId)))
@@ -438,7 +458,8 @@ function renderSimulate(): string {
 
   // revealed
   const trace = narratedResult!.trace
-  const result = scorePrediction(trace, userPrediction!)
+  const result = scoreAgent(trace, currentScenario!.expectedFire)
+  const predictionCorrect = trace.fired === userPrediction
   const meta = predictionMeta(result)
 
   return `<section class="screen sim-screen">
@@ -459,7 +480,7 @@ function renderSimulate(): string {
     </div>
 
     <div class="compare-banner tone-${meta.tone}">
-      <b>You predicted ${userPrediction ? 'it fires' : 'it stays quiet'}.</b> ${meta.label === 'Correct' ? 'That matches the engine exactly.' : meta.label === 'Missed' ? 'The engine stayed quiet — your rule needs a broader condition or one fewer exception.' : 'The engine fired anyway — your rule needs a narrower condition or a new exception.'}
+      <b>Your prediction was ${predictionCorrect ? 'correct' : 'not quite'}.</b> ${meta.label === 'Correct' ? 'The helper behaved correctly for this case.' : meta.label === 'Missed' ? 'The helper should have fired here but stayed quiet — it needs a broader condition or one fewer exception.' : 'The helper fired here but should have stayed quiet — it needs a narrower condition or a new exception.'}
     </div>
 
     <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
@@ -483,10 +504,12 @@ function renderSimulate(): string {
 
 function renderEvolve(): string {
   const a = store.activeAgent()
-  const p = getPattern(workingPatternId)
   if (!a) {
     return `<section class="screen"><div class="eyebrow">MAKE IT SMARTER</div><h2>No saved agent yet.</h2><p class="lede">Run a scenario in the simulator first — this is where the evidence accumulates.</p><button class="primary-action" data-action="to-simulate">Back to the simulator →</button></section>`
   }
+  // Same fix as renderSimulate: derive the pattern from the agent, not the
+  // possibly-stale workingPatternId global.
+  const p = getPattern(a.patternId)
 
   return `<section class="screen evolve-screen">
     <div class="eyebrow">ACT IV / THE RETURN LOOP</div>
@@ -615,6 +638,12 @@ function renderSettings(): string {
         </div>
       </div>
       <div class="modal-status" data-key-status></div>
+
+      <div class="modal-danger">
+        <div class="modal-danger-head">START FRESH</div>
+        <p class="modal-p">Wipes every agent, all XP and streak, and your lesson progress on this device — for showing someone a genuine first-time run. This does not touch your Mistral key.</p>
+        <button class="secondary-action danger ${resetArmed ? 'armed' : ''}" data-action="reset-progress">${resetArmed ? 'Click again to permanently erase everything ✕' : 'Erase all progress'}</button>
+      </div>
     </div>
   </div>`
 }
@@ -718,7 +747,34 @@ modalRoot.addEventListener('click', async (event) => {
   const action = t.closest<HTMLElement>('[data-action]')?.dataset.action
   if (!action) return
 
-  if (action === 'close-settings') { settingsOpen = false; renderModal(); return }
+  if (action === 'close-settings') { settingsOpen = false; resetArmed = false; renderModal(); return }
+  if (action === 'reset-progress') {
+    if (!resetArmed) {
+      resetArmed = true
+      modalRoot.innerHTML = renderSettings()
+      return
+    }
+    store.reset()
+    resetArmed = false
+    settingsOpen = false
+    // justMigratedFromV2 is fixed true-for-this-session from page load if a v2
+    // save existed — without this, resetting mid-session would resurrect the
+    // "we rebuilt your agents" banner even though this IS the fresh state now.
+    migrationBannerDismissed = true
+    // Clear every piece of in-memory UI state tied to the wiped save, so the
+    // very next render is a genuine, un-stale first-run screen.
+    workingPatternId = patterns[0].id
+    draftAgent = null
+    diagnosis = ''
+    currentScenario = null
+    narratedResult = null
+    pendingEvolution = null
+    lessonIndex = 0; lessonPicked = null; lessonRevealed = false
+    phase = 'home'
+    render()
+    showToast('Progress erased. This is a genuine first-run state.')
+    return
+  }
   if (action === 'save-key') {
     const input = modalRoot.querySelector<HTMLInputElement>('[data-settings-key]')
     const model = modalRoot.querySelector<HTMLSelectElement>('[data-settings-model]')
@@ -761,6 +817,7 @@ modalRoot.addEventListener('click', async (event) => {
 modalRoot.addEventListener('mousedown', (event) => {
   if (event.target === modalRoot.firstElementChild) {
     settingsOpen = false
+    resetArmed = false
     renderModal()
   }
 })
@@ -786,11 +843,19 @@ app.addEventListener('click', async (event) => {
   if (action === 'home') { go('home'); return }
   if (action === 'to-choose') { go('choose'); return }
   if (action === 'to-evolve') {
+    // Coming straight from Home's "Welcome back" cards (no draft in flight)
+    // means we're not necessarily still on the pattern from a PREVIOUS visit
+    // to Choose — workingPatternId is stale global state otherwise, and every
+    // downstream screen would show one pattern's scenarios/vocabulary against
+    // a DIFFERENT pattern's actual saved agent. Always resync to the real
+    // active agent before entering a screen that operates on "the" agent.
+    if (!draftAgent) syncWorkingPatternToActiveAgent()
     pendingEvolution = null
     go('evolve')
     return
   }
   if (action === 'to-simulate') {
+    if (!draftAgent) syncWorkingPatternToActiveAgent()
     // Always persist an in-progress draft here — this is also the return path
     // from "Repair this rule", where draftAgent holds edits to an ALREADY
     // saved agent. Gating on "no saved agent yet" would silently discard
@@ -872,7 +937,7 @@ app.addEventListener('click', async (event) => {
     if (!draftAgent) draftAgent = seedAgent()
     coachBusy = true; coachLog = []; render()
     try {
-      const r = await critique(draftAgent, getPattern(workingPatternId))
+      const r = await critique(draftAgent, getPattern(draftAgent.patternId))
       coachLive = r.live
       coachLog.push({ role: 'coach', text: r.text })
       if (r.fallbackReason) showToast(`Mistral unavailable, coach went scripted: ${r.fallbackReason}`)
@@ -935,7 +1000,8 @@ app.addEventListener('submit', async (event) => {
   coachBusy = true
   render()
   try {
-    const r = await reply(draftAgent ?? seedAgent(), getPattern(workingPatternId), coachLog.slice(0, -1), text)
+    const agentForCoach = draftAgent ?? seedAgent()
+    const r = await reply(agentForCoach, getPattern(agentForCoach.patternId), coachLog.slice(0, -1), text)
     coachLive = r.live
     coachLog.push({ role: 'coach', text: r.text })
   } catch (e) {
@@ -960,19 +1026,23 @@ async function doReveal() {
   abort = new AbortController()
   render()
   try {
-    narratedResult = await runScenario(agent, getPattern(workingPatternId), currentScenario, abort.signal)
+    // Use the AGENT's own pattern, not workingPatternId — this is the actual
+    // engine call, so a stale global here doesn't just mislabel the UI, it
+    // runs the deterministic match against the wrong pattern's vocabulary.
+    narratedResult = await runScenario(agent, getPattern(agent.patternId), currentScenario, abort.signal)
     simPhase = 'revealed'
     const trace = narratedResult.trace
-    const result: PredictionResult = scorePrediction(trace, userPrediction!)
+    const result: PredictionResult = scoreAgent(trace, currentScenario.expectedFire)
+    const predictionCorrect = trace.fired === userPrediction
     const updated = store.recordScenarioRun({
       at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
-      userPredictedFire: userPrediction!, trace, predictionResult: result,
+      userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
     })
     if (narratedResult.fallbackReason) showToast(`Mistral unavailable: ${narratedResult.fallbackReason}`)
     if (result !== 'correct' && updated) {
       evolving = true
       render()
-      pendingEvolution = await proposeEvolution(updated, getPattern(workingPatternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
+      pendingEvolution = await proposeEvolution(updated, getPattern(updated.patternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
       evolving = false
     }
   } catch (e) {
@@ -985,7 +1055,8 @@ async function doReveal() {
 }
 
 async function doStressScenario() {
-  const p = getPattern(workingPatternId)
+  const agent = store.activeAgent() ?? draftAgent
+  const p = getPattern(agent?.patternId ?? workingPatternId)
   simBusy = true
   abort = new AbortController()
   render()

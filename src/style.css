@@ -329,6 +329,11 @@ h1, h2, h3, p { margin: 0; }
 .modal-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; gap: 10px; }
 .modal-actions > div { display: flex; gap: 8px; }
 .modal-status { margin-top: 12px; font: 11px 'DM Mono'; color: var(--muted); min-height: 16px; }
+.modal-danger { margin-top: 24px; padding-top: 18px; border-top: 1px solid #2f2f2a; }
+.modal-danger-head { font: 10px 'DM Mono'; letter-spacing: .12em; color: var(--bad); }
+.secondary-action.danger { border-color: rgba(255, 139, 122, .4); color: var(--bad); margin-top: 12px; }
+.secondary-action.danger:hover { border-color: var(--bad); background: rgba(255, 139, 122, .08); }
+.secondary-action.danger.armed { background: var(--bad); border-color: var(--bad); color: var(--ink); }
 
 /* ---------- toast ---------- */
 .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--lime); color: var(--ink); padding: 12px 20px; border-radius: 6px; font: 500 13px 'Space Grotesk'; z-index: 80; box-shadow: 0 12px 40px rgba(0, 0, 0, .4); animation: enter .25s ease both; }
