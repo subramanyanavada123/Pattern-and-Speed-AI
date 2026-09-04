@@ -12,7 +12,8 @@ import { fetchRealWorldContext, osmEmbedUrl, RealWorldError, type RealWorldConte
 import {
   orchestratePattern, isBackendUp, knownBackendState, BackendError, type OrchestrationResult,
   fetchRoster, createSchedule, listSchedules, resumeSchedule, deleteSchedule,
-  type RosterCategories, type ScheduledJob,
+  createCommitment, listCommitments, resolveCommitment,
+  type RosterCategories, type ScheduledJob, type Commitment,
 } from './backend'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -66,6 +67,13 @@ let schedulesLoading = false
 // per app load, doesn't block first paint, doesn't nag if the backend's
 // simply not running (that's expected for most visits and not an error).
 let homeScheduleCheckDone = false
+
+// ---- Real commitments: a one-shot deadline for a spawned agent's concrete
+// suggestion (backend/commitments.py) — pending ones surface on Home so the
+// loop closes there regardless of which screen created them.
+let commitments: Commitment[] = []
+let commitmentBusy: Record<string, boolean> = {}
+let commitmentJustCreated: string | null = null // id of the one just started, for a brief confirmation on the Team screen
 let scheduleBusy = false
 let scheduleError = ''
 let scheduleFormRole = ''
@@ -246,11 +254,13 @@ function renderHome(): string {
   if (returning) {
     if (!homeScheduleCheckDone) void checkHomeSchedules()
     const liveCount = schedules.length
+    const pendingCommitments = commitments.filter((c) => c.status === 'pending')
 
     return `<section class="screen home-return">
       <div class="eyebrow">WELCOME BACK${away > 0 ? ` · ${away} DAY${away === 1 ? '' : 'S'} AWAY` : ''}</div>
       <h1>${a!.bestShiftLength > 0 ? `Beat your best:<br><em>${a!.bestShiftLength} in a row.</em>` : `Your agent is<br><em>still running.</em>`}</h1>
       <p class="lede">${esc(getPattern(a!.patternId).title)} — version ${a!.version}, ${a!.history.length} evolution${a!.history.length === 1 ? '' : 's'} in, tested against ${a!.scenarioLog.length} scenario${a!.scenarioLog.length === 1 ? '' : 's'}. ${a!.bestShiftLength > 0 ? 'Every wrong call ends the streak — see how far it holds this time.' : 'Run it against a new case and see how far it holds before it breaks.'}</p>
+      ${pendingCommitments.length ? renderCommitmentsPanel(pendingCommitments) : ''}
       <div class="home-cards">
         <button class="home-card accent" data-action="to-simulate"><span class="hc-k">SHIFT</span><strong>${a!.bestShiftLength > 0 ? `Beat ${a!.bestShiftLength}` : 'Start a shift'}</strong><p>Chained scenarios, no detour — one wrong call ends it.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-evolve"><span class="hc-k">EVOLVE</span><strong>Review the evidence</strong><p>See every accepted edit, with before/after and regression checks.</p><span class="hc-go">→</span></button>
@@ -803,13 +813,21 @@ function renderTeamResult(result: OrchestrationResult): string {
       ${result.subAgents.map((a, i) => {
         const role = result.selectedRoles[i]
         const category = role ? result.roleCategories[role] : ''
+        const justStarted = commitmentJustCreated === `${i}`
         return `
         <div class="team-card ${a.error ? 'team-card-error' : ''}">
           <div class="team-card-head"><b>${esc(a.agentName)}</b><span>${a.durationMs}ms</span></div>
           ${category ? `<span class="team-card-category">${esc(category)}</span>` : ''}
           <p class="team-card-role">${esc(a.role)}</p>
           ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>`}
-          ${!a.error && role ? `<button class="ghost-link team-card-schedule" data-action="team-schedule-this" data-role="${esc(role)}">Keep this one running →</button>` : ''}
+          ${!a.error && role ? `
+            <div class="team-card-actions">
+              <button class="ghost-link team-card-schedule" data-action="team-schedule-this" data-role="${esc(role)}">Keep this one running →</button>
+              ${justStarted
+                ? `<span class="team-card-committed">✓ Real 30-min timer started — check Home</span>`
+                : `<button class="ghost-link team-card-commit" data-action="team-start-timer" data-idx="${i}">Start a real 30-min timer for this →</button>`}
+            </div>
+          ` : ''}
         </div>
       `}).join('')}
     </div>
@@ -859,7 +877,10 @@ function renderTeamScheduleTab(description: string): string {
     </div>
 
     <div class="schedule-list">
-      <span class="eyebrow">${schedulesLoading ? 'LOADING REAL SCHEDULES…' : `LIVE SCHEDULED JOBS (${schedules.length})`}</span>
+      <div class="schedule-list-head">
+        <span class="eyebrow">${schedulesLoading ? 'LOADING REAL SCHEDULES…' : `LIVE SCHEDULED JOBS (${schedules.length})`}</span>
+        <button class="ghost-link" data-action="schedule-refresh" ${schedulesLoading ? 'disabled' : ''}>↻ Refresh</button>
+      </div>
       ${schedules.length === 0 && !schedulesLoading ? '<p class="lede small">No scheduled agents yet — create one above. It keeps firing on its real interval as long as the backend process is running.</p>' : ''}
       ${schedules.map((j) => `
         <div class="schedule-card ${j.needsKey ? 'schedule-card-needs-key' : ''}">
@@ -875,7 +896,7 @@ function renderTeamScheduleTab(description: string): string {
             <p class="team-card-output team-card-output-error">✕ ${esc(j.lastError)}</p>
           ` : j.lastOutput ? `
             <p class="team-card-output">${esc(j.lastOutput)}</p>
-          ` : '<p class="lede small">Running…</p>'}
+          ` : `<p class="lede small">First run in progress (a real LLM call or search can take a few seconds) — <button class="ghost-link schedule-inline-refresh" data-action="schedule-refresh">check now</button>.</p>`}
           <button class="ghost-link schedule-delete" data-action="schedule-delete" data-id="${esc(j.id)}">Cancel this schedule</button>
         </div>
       `).join('')}
@@ -934,11 +955,32 @@ async function checkHomeSchedules() {
   homeScheduleCheckDone = true
   try {
     const up = await isBackendUp()
-    if (up) schedules = await listSchedules()
+    if (up) {
+      schedules = await listSchedules()
+      commitments = await listCommitments()
+    }
   } catch {
     /* backend not running — expected, home just shows the non-live framing */
   }
   render()
+}
+
+function renderCommitmentsPanel(pending: Commitment[]): string {
+  return `<div class="commitments-panel">
+    <span class="eyebrow">REAL COMMITMENTS FROM YOUR TEAM</span>
+    ${pending.map((c) => {
+      const remaining = c.dueAt - Date.now() / 1000
+      const busy = commitmentBusy[c.id]
+      return `<div class="commitment-card ${c.fired ? 'commitment-due' : ''}">
+        <p class="commitment-text">${esc(c.text)}</p>
+        <p class="commitment-meta">${esc(c.sourceAgentName)}${c.category ? ` · ${esc(c.category)}` : ''} · ${c.fired ? 'time\'s up — did you do it?' : `${Math.max(1, Math.round(remaining / 60))} min left`}</p>
+        <div class="commitment-actions">
+          <button class="ghost-link commitment-done" data-action="commitment-resolve" data-id="${esc(c.id)}" data-status="done" ${busy ? 'disabled' : ''}>✓ Done</button>
+          <button class="ghost-link commitment-skip" data-action="commitment-resolve" data-id="${esc(c.id)}" data-status="skipped" ${busy ? 'disabled' : ''}>Skip it</button>
+        </div>
+      </div>`
+    }).join('')}
+  </div>`
 }
 
 // ---------------------------------------------------------------- EVOLVE (evidence-gated)
@@ -1387,6 +1429,17 @@ app.addEventListener('click', async (event) => {
     render()
     return
   }
+  if (action === 'team-start-timer') {
+    const idx = Number(actionEl?.dataset.idx)
+    if (!Number.isNaN(idx)) await doStartCommitmentTimer(idx)
+    return
+  }
+  if (action === 'commitment-resolve') {
+    const id = actionEl?.dataset.id
+    const status = actionEl?.dataset.status as 'done' | 'skipped' | undefined
+    if (id && status) await doResolveCommitment(id, status)
+    return
+  }
   if (action === 'schedule-create') { await doCreateSchedule(); return }
   if (action === 'schedule-resume') {
     const id = actionEl?.dataset.id
@@ -1396,6 +1449,19 @@ app.addEventListener('click', async (event) => {
   if (action === 'schedule-delete') {
     const id = actionEl?.dataset.id
     if (id) await doDeleteSchedule(id)
+    return
+  }
+  if (action === 'schedule-refresh') {
+    schedulesLoading = true
+    render()
+    try {
+      schedules = await listSchedules()
+    } catch (e) {
+      scheduleError = e instanceof BackendError ? e.message : 'Could not refresh schedules.'
+    } finally {
+      schedulesLoading = false
+      render()
+    }
     return
   }
 
@@ -1756,6 +1822,7 @@ async function doRunTeam() {
   const description = p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`
   teamBusy = true
   teamError = ''
+  commitmentJustCreated = null
   render()
   try {
     teamResult = await orchestratePattern(description)
@@ -1763,6 +1830,50 @@ async function doRunTeam() {
     teamError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Something went wrong contacting the backend.'
   } finally {
     teamBusy = false
+    render()
+  }
+}
+
+/**
+ * The one genuinely real "agent does something" action available to a
+ * browser + Python backend: a real server-side countdown (survives a closed
+ * tab) for the concrete thing a spawned agent suggested. No fake progress
+ * bar, no pretending to control anything outside this app — completion is
+ * an honest self-report, surfaced on Home so it's not buried in Team.
+ */
+async function doStartCommitmentTimer(subAgentIdx: number) {
+  if (!teamResult) return
+  const agent = teamResult.subAgents[subAgentIdx]
+  const role = teamResult.selectedRoles[subAgentIdx]
+  if (!agent || agent.error) return
+  const category = role ? teamResult.roleCategories[role] : ''
+  try {
+    const c = await createCommitment({
+      text: agent.output,
+      sourceAgentName: agent.agentName,
+      category: category || '',
+      dueMinutes: 30,
+    })
+    commitments = [c, ...commitments]
+    commitmentJustCreated = `${subAgentIdx}`
+  } catch (e) {
+    teamError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not start the timer.'
+  }
+  render()
+}
+
+/** An honest self-report — this backend cannot observe whether you actually did the thing, so "done" is only ever what you click. */
+async function doResolveCommitment(id: string, status: 'done' | 'skipped') {
+  commitmentBusy = { ...commitmentBusy, [id]: true }
+  render()
+  try {
+    const updated = await resolveCommitment(id, status)
+    commitments = commitments.map((c) => (c.id === id ? updated : c))
+  } catch {
+    /* leave it pending — user can retry from the same card */
+  } finally {
+    const { [id]: _dropped, ...rest } = commitmentBusy
+    commitmentBusy = rest
     render()
   }
 }
@@ -1793,6 +1904,24 @@ async function doCreateSchedule() {
   } finally {
     scheduleBusy = false
     render()
+  }
+  // The backend fires the job's first run in the background and responds
+  // before it's necessarily done (so the create call itself stays fast) —
+  // poll briefly for the real result instead of leaving the card stuck on
+  // "Running…" forever with nothing to ever refresh it.
+  void pollScheduleUntilSettled()
+}
+
+async function pollScheduleUntilSettled() {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise((r) => setTimeout(r, 1000))
+    try {
+      schedules = await listSchedules()
+    } catch {
+      return // backend went away mid-poll — stop rather than loop on errors
+    }
+    render()
+    if (schedules.every((j) => j.lastRunAt !== null || j.needsKey)) return
   }
 }
 

@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from agents.orchestrator import orchestrate
 from agents.roster import ALL_AGENTS, CATEGORIES
 from scheduler import store as schedule_store
+from commitments import store as commitment_store
 
 app = FastAPI(title="Pattern Machine Agent Backend", version="0.1.0")
 
@@ -219,3 +220,80 @@ async def resume_schedule(job_id: str, req: ResumeScheduleRequest) -> ScheduledJ
 async def delete_schedule(job_id: str) -> dict:
     schedule_store.delete(job_id)
     return {"status": "deleted", "id": job_id}
+
+
+# ---- Real commitments: a one-shot real deadline for a spawned agent's
+# concrete suggestion (see commitments.py for why this is a separate,
+# simpler mechanism than the recurring /schedule jobs above — no LLM call
+# on fire, just a real countdown and an honest self-report).
+
+
+class CreateCommitmentRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    source_agent_name: str = Field(..., min_length=1, max_length=120)
+    category: str = Field(default="")
+    due_minutes: int = Field(..., ge=1, le=1440)
+
+
+class ResolveCommitmentRequest(BaseModel):
+    status: str = Field(..., pattern="^(done|skipped)$")
+
+
+class CommitmentResponse(BaseModel):
+    id: str
+    text: str
+    source_agent_name: str
+    category: str
+    due_minutes: int
+    created_at: float
+    due_at: float
+    fired: bool
+    status: str
+    resolved_at: float | None
+
+
+def _commitment_to_response(c) -> CommitmentResponse:
+    return CommitmentResponse(
+        id=c.id, text=c.text, source_agent_name=c.source_agent_name, category=c.category,
+        due_minutes=c.due_minutes, created_at=c.created_at, due_at=c.due_at,
+        fired=c.fired, status=c.status, resolved_at=c.resolved_at,
+    )
+
+
+@app.post("/commitment", response_model=CommitmentResponse)
+async def create_commitment(req: CreateCommitmentRequest) -> CommitmentResponse:
+    """Starts a REAL countdown (APScheduler `date` trigger, server-side —
+    survives a closed tab) for a concrete action a spawned agent suggested.
+    No LLM call happens when it fires; this backend can't observe whether
+    you actually did a workout, so completion is an honest self-report via
+    POST /commitment/{id}/resolve."""
+    try:
+        c = commitment_store.create(
+            text=req.text, source_agent_name=req.source_agent_name,
+            category=req.category, due_minutes=req.due_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _commitment_to_response(c)
+
+
+@app.get("/commitment")
+async def list_commitments() -> dict:
+    return {"commitments": [_commitment_to_response(c) for c in commitment_store.list()]}
+
+
+@app.post("/commitment/{commitment_id}/resolve", response_model=CommitmentResponse)
+async def resolve_commitment(commitment_id: str, req: ResolveCommitmentRequest) -> CommitmentResponse:
+    try:
+        c = commitment_store.resolve(commitment_id, req.status)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such commitment.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _commitment_to_response(c)
+
+
+@app.delete("/commitment/{commitment_id}")
+async def delete_commitment(commitment_id: str) -> dict:
+    commitment_store.delete(commitment_id)
+    return {"status": "deleted", "id": commitment_id}

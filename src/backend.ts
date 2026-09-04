@@ -217,3 +217,72 @@ export async function resumeSchedule(jobId: string): Promise<ScheduledJob> {
 export async function deleteSchedule(jobId: string): Promise<void> {
   await backendFetch(`/schedule/${encodeURIComponent(jobId)}`, { method: 'DELETE' })
 }
+
+/**
+ * A real one-shot deadline (backend/commitments.py — APScheduler `date`
+ * trigger, not `interval`) for a concrete action a spawned agent suggested.
+ * No LLM call happens when it fires and no Mistral key is needed at all —
+ * this backend genuinely cannot observe whether you did a workout, so
+ * completion is an honest self-report via resolveCommitment(), never
+ * fabricated.
+ */
+export type Commitment = {
+  id: string
+  text: string
+  sourceAgentName: string
+  category: string
+  dueMinutes: number
+  createdAt: number
+  dueAt: number
+  fired: boolean
+  status: 'pending' | 'done' | 'skipped'
+  resolvedAt: number | null
+}
+
+function commitmentFromJson(c: Record<string, unknown>): Commitment {
+  return {
+    id: c.id as string,
+    text: c.text as string,
+    sourceAgentName: c.source_agent_name as string,
+    category: (c.category as string) ?? '',
+    dueMinutes: c.due_minutes as number,
+    createdAt: c.created_at as number,
+    dueAt: c.due_at as number,
+    fired: Boolean(c.fired),
+    status: c.status as Commitment['status'],
+    resolvedAt: (c.resolved_at as number) ?? null,
+  }
+}
+
+export async function createCommitment(opts: { text: string; sourceAgentName: string; category: string; dueMinutes: number }): Promise<Commitment> {
+  const res = await backendFetch('/commitment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: opts.text,
+      source_agent_name: opts.sourceAgentName,
+      category: opts.category,
+      due_minutes: opts.dueMinutes,
+    }),
+  })
+  return commitmentFromJson(await res.json())
+}
+
+export async function listCommitments(signal?: AbortSignal): Promise<Commitment[]> {
+  const res = await backendFetch('/commitment', { signal })
+  const json = await res.json()
+  return (json.commitments ?? []).map(commitmentFromJson)
+}
+
+export async function resolveCommitment(id: string, status: 'done' | 'skipped'): Promise<Commitment> {
+  const res = await backendFetch(`/commitment/${encodeURIComponent(id)}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  return commitmentFromJson(await res.json())
+}
+
+export async function deleteCommitment(id: string): Promise<void> {
+  await backendFetch(`/commitment/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}

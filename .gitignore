@@ -29,3 +29,4 @@ backend/.venv/
 *.sln
 *.sw?
 backend/schedules.json
+backend/commitments.json

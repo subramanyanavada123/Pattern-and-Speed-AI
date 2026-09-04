@@ -127,7 +127,16 @@ h1, h2, h3, p { margin: 0; }
 .home-rail div { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .home-rail span { display: block; color: var(--lime); font: 12px 'DM Mono'; margin-bottom: 8px; }
 
-.home-cards { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.commitments-panel { margin-top: 28px; display: flex; flex-direction: column; gap: 10px; }
+.commitment-card { border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 14px 16px; }
+.commitment-card.commitment-due { border-color: rgba(212, 250, 107, .5); background: rgba(212, 250, 107, .04); }
+.commitment-text { color: var(--paper); font-size: 13.5px; line-height: 1.5; }
+.commitment-meta { color: var(--dim); font: 11px 'DM Mono'; margin-top: 6px; }
+.commitment-actions { display: flex; gap: 14px; margin-top: 10px; }
+.commitment-done { color: var(--lime); font-size: 12px; }
+.commitment-skip { color: var(--dim); font-size: 12px; }
+
+.home-cards { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
 .home-card { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: 22px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 8px; min-height: 190px; transition: border-color .2s, transform .2s, background .2s; }
 .home-card:hover { border-color: var(--lime); transform: translateY(-4px); background: var(--panel-2); }
 .home-card.accent { border-color: rgba(212, 250, 107, .35); }
@@ -358,7 +367,10 @@ h1, h2, h3, p { margin: 0; }
 .team-card-output-error { color: var(--bad); }
 @media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
 .team-card-category { display: inline-block; margin-top: 8px; font: 10px 'DM Mono'; color: var(--lime); text-transform: uppercase; letter-spacing: .04em; }
-.team-card-schedule { display: block; margin-top: 10px; font-size: 11.5px; }
+.team-card-schedule { display: block; font-size: 11.5px; }
+.team-card-actions { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.team-card-commit { font-size: 11.5px; color: var(--lime); }
+.team-card-committed { font: 11px 'DM Mono'; color: var(--lime); }
 .team-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .team-nav .ghost-link { font-size: 12px; }
 .lede.small { font-size: 12.5px; margin-top: 10px; }
@@ -378,6 +390,9 @@ h1, h2, h3, p { margin: 0; }
 .schedule-role-desc { color: var(--muted); font-size: 12px; font-style: italic; margin-top: -8px; }
 
 .schedule-list { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
+.schedule-list-head { display: flex; justify-content: space-between; align-items: center; }
+.schedule-list-head .ghost-link { font-size: 11px; }
+.schedule-inline-refresh { display: inline; font-size: inherit; padding: 0; text-decoration: underline; }
 .schedule-card { border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 16px 18px; }
 .schedule-card.schedule-card-needs-key { border-color: rgba(255, 200, 87, .4); }
 .schedule-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
