@@ -9,6 +9,7 @@ import { proposeEvolution, predictionMeta } from './evolve'
 import { testKey, listModels, type ModelInfo, type Citation } from './mistral'
 import { scoreAgent, describeCondition, formatClock } from './engine'
 import { fetchRealWorldContext, osmEmbedUrl, RealWorldError, type RealWorldContext } from './realworld'
+import { orchestratePattern, isBackendUp, knownBackendState, BackendError, type OrchestrationResult } from './backend'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -44,6 +45,12 @@ let resetArmed = false
 let discoverText = ''
 let discoverBusy = false
 let discoverError = ''
+
+// ---- team: a REAL Python backend spawning genuinely concurrent sub-agents ----
+let teamBusy = false
+let teamError = ''
+let teamResult: OrchestrationResult | null = null
+let teamBackendChecked = false
 
 // ---- simulate (predict / reveal / compare / repair / replay) ----
 type SimPhase = 'predicting' | 'revealed'
@@ -335,6 +342,7 @@ function renderDecode(): string {
         .join('')}</div>
       <button class="primary-action ${diagnosis ? '' : 'disabled'}" data-action="to-build">Take this into the build step <span>→</span></button>
     </div>
+    <button class="ghost-link team-entry" data-action="to-team">🐍 Or spawn a real multi-agent team for this pattern (separate Python backend) →</button>
   </section>`
 }
 
@@ -681,6 +689,83 @@ function renderSimulate(): string {
   </section>`
 }
 
+// ---------------------------------------------------------------- TEAM (real backend, real concurrent sub-agents)
+
+/**
+ * This screen calls a REAL, separately-running Python process (backend/main.py)
+ * that spawns genuinely concurrent sub-agent coroutines — not a simulation,
+ * not one JSON blob pretending to be several agents. Requires the backend to
+ * be running locally (uvicorn main:app --port 8787); the browser cannot do
+ * this on its own.
+ */
+function renderTeam(): string {
+  const p = getPattern(workingPatternId)
+  const description = p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`
+
+  if (!teamBackendChecked && !teamBusy) {
+    // Fire off a reachability check the first time this screen is shown —
+    // doesn't block rendering, just informs the CTA state on the next render.
+    void checkTeamBackend()
+  }
+
+  const backendState = knownBackendState()
+
+  return `<section class="screen team-screen">
+    <div class="eyebrow">REAL AGENTS · SEPARATE PYTHON BACKEND</div>
+    <h2>Spawn a real<br><em>team of agents.</em></h2>
+    <p class="lede">This calls an actual FastAPI process running on your machine — not a browser simulation. It plans which specialist agents your pattern needs, then runs them as genuinely concurrent, independent processes, each with its own Mistral call.</p>
+
+    <div class="team-source-card">
+      <span class="eyebrow">PATTERN GOING IN</span>
+      <p>${esc(description)}</p>
+    </div>
+
+    ${backendState === false ? `
+      <div class="team-offline">
+        <p><b>Backend not reachable at http://127.0.0.1:8787.</b> Start it in a terminal:</p>
+        <pre class="snippet-block">cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8787</pre>
+        <button class="secondary-action" data-action="team-recheck">Check again</button>
+      </div>
+    ` : ''}
+
+    ${teamError ? `<p class="team-error">${esc(teamError)}</p>` : ''}
+
+    <button class="primary-action big ${teamBusy || backendState === false ? 'disabled' : ''}" data-action="run-team" ${teamBusy || backendState === false ? 'disabled' : ''}>
+      ${teamBusy ? 'Orchestrating — real agents running…' : 'Spawn the team'} <span>→</span>
+    </button>
+
+    ${teamResult ? renderTeamResult(teamResult) : ''}
+  </section>`
+}
+
+function renderTeamResult(result: OrchestrationResult): string {
+  return `<div class="team-result">
+    <div class="team-plan">
+      <span class="eyebrow">ORCHESTRATOR'S PLAN</span>
+      <p>${esc(result.planReasoning || 'No reasoning returned.')}</p>
+      ${result.planError ? `<p class="team-plan-error">⚠ ${esc(result.planError)}</p>` : ''}
+      <p class="team-timing">Selected ${result.selectedRoles.length} agent${result.selectedRoles.length === 1 ? '' : 's'} · ran in ${result.totalDurationMs}ms total (concurrently, not summed)</p>
+    </div>
+    <div class="team-grid">
+      ${result.subAgents.map((a) => `
+        <div class="team-card ${a.error ? 'team-card-error' : ''}">
+          <div class="team-card-head"><b>${esc(a.agentName)}</b><span>${a.durationMs}ms</span></div>
+          <p class="team-card-role">${esc(a.role)}</p>
+          ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>`}
+        </div>
+      `).join('')}
+    </div>
+  </div>`
+}
+
+async function checkTeamBackend() {
+  teamBackendChecked = true
+  await isBackendUp()
+  render()
+}
+
 // ---------------------------------------------------------------- EVOLVE (evidence-gated)
 
 function renderEvolve(): string {
@@ -849,6 +934,7 @@ function render() {
     : phase === 'decode' ? renderDecode()
     : phase === 'build' ? renderBuild()
     : phase === 'simulate' ? renderSimulate()
+    : phase === 'team' ? renderTeam()
     : renderEvolve()
 
   app.innerHTML =
@@ -1098,6 +1184,22 @@ app.addEventListener('click', async (event) => {
   // ---- decode
   if (diag) { diagnosis = diag as DiagnosisId; render(); return }
   if (action === 'to-build') { if (diagnosis) go('build'); return }
+  if (action === 'to-team') {
+    teamResult = null
+    teamError = ''
+    teamBackendChecked = false
+    go('team')
+    return
+  }
+  if (action === 'run-team') {
+    await doRunTeam()
+    return
+  }
+  if (action === 'team-recheck') {
+    teamBackendChecked = false
+    render()
+    return
+  }
 
   // ---- build / lessons
   if (lessonTab !== undefined) {
@@ -1435,6 +1537,23 @@ async function doUseRealWorld() {
     realWorldError = e instanceof RealWorldError ? e.message : 'Could not get real-world data. Using the scenario as authored.'
   } finally {
     realWorldBusy = false
+    render()
+  }
+}
+
+async function doRunTeam() {
+  if (teamBusy) return
+  const p = getPattern(workingPatternId)
+  const description = p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`
+  teamBusy = true
+  teamError = ''
+  render()
+  try {
+    teamResult = await orchestratePattern(description)
+  } catch (e) {
+    teamError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Something went wrong contacting the backend.'
+  } finally {
+    teamBusy = false
     render()
   }
 }

@@ -332,6 +332,32 @@ h1, h2, h3, p { margin: 0; }
 .realworld-note { color: var(--dim) !important; font-size: 10.5px !important; }
 
 /* ---------- evolve ---------- */
+/* ---------- team (real backend, real concurrent sub-agents) ---------- */
+.team-entry { display: inline-block; margin-top: 22px; }
+.team-screen { max-width: 980px; }
+.team-source-card { margin-top: 24px; border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 16px 18px; }
+.team-source-card p { color: #d0cdc4; font-size: 13.5px; line-height: 1.55; margin-top: 8px; }
+.team-offline { margin-top: 20px; border: 1px solid rgba(255, 139, 122, .4); background: rgba(255, 139, 122, .06); border-radius: 8px; padding: 18px 20px; }
+.team-offline p { color: #d0cdc4; font-size: 13px; line-height: 1.5; }
+.team-offline p b { color: var(--paper); }
+.snippet-block { background: #0f0f0d; border: 1px solid #2f2f2a; border-radius: 6px; padding: 12px 14px; font: 12px 'DM Mono'; color: var(--lime); margin: 10px 0; overflow-x: auto; white-space: pre; }
+.team-error { color: var(--bad); font-size: 12.5px; margin-top: 14px; }
+.team-result { margin-top: 30px; }
+.team-plan { border: 1px solid rgba(212, 250, 107, .35); background: rgba(212, 250, 107, .04); border-radius: 8px; padding: 18px 20px; }
+.team-plan p { color: #d0cdc4; font-size: 13.5px; line-height: 1.55; margin-top: 8px; }
+.team-plan-error { color: var(--warn) !important; font-size: 12px !important; }
+.team-timing { color: var(--dim) !important; font: 11px 'DM Mono' !important; margin-top: 12px !important; }
+.team-grid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.team-card { border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 16px 18px; }
+.team-card.team-card-error { border-color: rgba(255, 139, 122, .4); }
+.team-card-head { display: flex; justify-content: space-between; align-items: baseline; }
+.team-card-head b { font: 600 15px 'Space Grotesk'; }
+.team-card-head span { font: 10px 'DM Mono'; color: var(--dim); }
+.team-card-role { color: var(--muted); font-size: 11.5px; line-height: 1.4; margin-top: 6px; font-style: italic; }
+.team-card-output { color: #d0cdc4; font-size: 13px; line-height: 1.55; margin-top: 12px; }
+.team-card-output-error { color: var(--bad); }
+@media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
+
 .evolve-screen { max-width: 940px; }
 .agent-full { margin-top: 26px; border: 1px solid #4c4c42; border-radius: 10px; background: var(--panel); overflow: hidden; }
 .af-head { padding: 16px 20px; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px; font: 600 15px 'Space Grotesk'; }

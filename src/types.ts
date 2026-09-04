@@ -1,4 +1,4 @@
-export type Phase = 'home' | 'choose' | 'decode' | 'build' | 'simulate' | 'evolve'
+export type Phase = 'home' | 'choose' | 'decode' | 'build' | 'simulate' | 'evolve' | 'team'
 
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
