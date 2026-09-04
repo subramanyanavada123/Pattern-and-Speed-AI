@@ -98,6 +98,15 @@ h1, h2, h3, p { margin: 0; }
 .lede b { color: var(--paper); font-weight: 500; }
 
 /* ---------- home ---------- */
+.goal-card { margin-top: 36px; border: 1px solid rgba(212, 250, 107, .35); background: rgba(212, 250, 107, .04); border-radius: 10px; padding: 26px; max-width: 760px; }
+.goal-card-head { font: 10px 'DM Mono'; letter-spacing: .12em; color: var(--lime); }
+.goal-example { display: grid; grid-template-columns: 1fr 20px 1fr 20px 1fr; gap: 12px; align-items: center; margin-top: 18px; }
+.goal-part { background: #14140f; border: 1px solid #34342e; border-radius: 8px; padding: 14px; }
+.goal-part span { display: block; font: 9px 'DM Mono'; letter-spacing: .1em; color: var(--muted); margin-bottom: 8px; }
+.goal-part p { color: var(--paper); font-size: 13px; line-height: 1.45; }
+.goal-example i { color: var(--lime); font-style: normal; text-align: center; font-size: 16px; }
+.goal-caption { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin-top: 18px; }
+.goal-caption em { color: var(--lime); font-style: normal; }
 .home-start { display: flex; align-items: center; gap: 22px; margin-top: 42px; flex-wrap: wrap; }
 .primary-action, .secondary-action { border: 0; background: var(--lime); color: var(--ink); padding: 14px 18px; font: 600 13px 'Space Grotesk'; cursor: pointer; border-radius: 4px; transition: transform .15s, opacity .15s; }
 .primary-action:hover, .secondary-action:hover { transform: translateY(-2px); }
@@ -394,6 +403,8 @@ h1, h2, h3, p { margin: 0; }
   .concept-strip i:nth-of-type(2) { display: none; }
   .concept-strip div:nth-of-type(3) { grid-column: 1; }
   .concept-strip div:nth-of-type(4) { grid-column: 3; }
+  .goal-example { grid-template-columns: 1fr; }
+  .goal-example i { transform: rotate(90deg); padding: 2px 0; }
   .topbar { padding: 10px 20px; gap: 14px; }
   .mission { display: none; }
   .app-layout { display: block; }

@@ -193,18 +193,32 @@ function renderHome(): string {
   }
 
   return `<section class="screen home-first">
-    <div class="eyebrow">ACT I / SEE THE LOOP</div>
-    <h1>Your day is a program<br><em>you didn't write.</em></h1>
-    <p class="lede">Pick a loop you recognise from student life, write it as a real deterministic rule — conditions, exceptions, one action — then watch a rule engine actually evaluate it against test scenarios. Not a chatbot narrating a story: code deciding whether your rule fires.</p>
-    <div class="home-start">
-      <button class="primary-action big" data-action="to-choose">Start with one loop <span>→</span></button>
-      <button class="ghost-link" data-action="settings">${keyStore.has() ? 'Mistral key connected ·' : ''} ${keyStore.has() ? 'settings' : 'Add a Mistral key for narration + coaching'}</button>
+    <div class="eyebrow">WHAT THIS IS</div>
+    <h1>An "agent" is just<br><em>a habit, made explicit.</em></h1>
+    <p class="lede">You already run agents in your head, badly: <b>"if it's late and my phone's in reach, I scroll."</b> That's a sense (it's late), a rule (phone in reach → scroll), and an action — just never written down, so it can't be tested or fixed. In this app you'll take one loop like that from your own life and build it as a real one.</p>
+
+    <div class="goal-card">
+      <div class="goal-card-head">WHAT YOU'LL HAVE IN ~10 MINUTES</div>
+      <div class="goal-example">
+        <div class="goal-part"><span>SENSE</span><p>It's after 11pm AND my phone is in my hand</p></div>
+        <i>→</i>
+        <div class="goal-part"><span>UNLESS</span><p>I'm not actually on call tonight</p></div>
+        <i>→</i>
+        <div class="goal-part"><span>ACTION</span><p>Pause the video, show me tomorrow's first task</p></div>
+      </div>
+      <p class="goal-caption">A small rule like this, for a loop <em>you</em> picked — then you'll throw real test cases at it and watch it actually decide, correctly or not, in front of you.</p>
     </div>
+
+    <div class="home-start">
+      <button class="primary-action big" data-action="to-choose">Pick your loop <span>→</span></button>
+      <button class="ghost-link" data-action="settings">${keyStore.has() ? 'Mistral key connected ·' : ''} ${keyStore.has() ? 'settings' : 'Add a Mistral key later for extra narration + coaching (optional)'}</button>
+    </div>
+
     <div class="home-rail">
-      <div><span>01 / DECODE</span>Trigger, routine, reward, cost</div>
-      <div><span>02 / BUILD</span>Conditions, exceptions, one action</div>
-      <div><span>03 / PREDICT</span>Guess, then see the real verdict</div>
-      <div><span>04 / EVOLVE</span>Edit with regression checks, not guesses</div>
+      <div><span>01 · NOTICE</span>Name a loop from your own life — trigger, routine, reward, cost</div>
+      <div><span>02 · BUILD</span>Turn it into a rule: when this, unless that, do this one thing</div>
+      <div><span>03 · TEST</span>Guess what your rule will do, then watch it actually run</div>
+      <div><span>04 · IMPROVE</span>Fix what broke, without accidentally breaking what worked</div>
     </div>
   </section>`
 }
