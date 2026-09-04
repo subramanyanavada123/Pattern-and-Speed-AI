@@ -7,6 +7,7 @@ import { runScenario, proposeStressScenario, pickNextScenario, type NarratedResu
 import { proposeEvolution, predictionMeta } from './evolve'
 import { testKey, listModels, type ModelInfo, type Citation } from './mistral'
 import { scoreAgent, describeCondition, formatClock } from './engine'
+import { fetchRealWorldContext, osmEmbedUrl, RealWorldError, type RealWorldContext } from './realworld'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -50,6 +51,9 @@ let scenarioToReplay: Scenario | null = null
 let isReplaying = false
 let simBusy = false
 let pendingEvolution: Awaited<ReturnType<typeof proposeEvolution>> | null = null
+let realWorld: RealWorldContext | null = null
+let realWorldBusy = false
+let realWorldError = ''
 
 const LESSON_PARTS: PartId[] = ['perceive', 'decide', 'act', 'learn']
 
@@ -414,6 +418,40 @@ function renderRuleEditor(p: ReturnType<typeof getPattern>, emphasis: DiagnosisI
 
 // ---------------------------------------------------------------- SIMULATE (Predict → Reveal → Compare → Repair → Replay)
 
+/**
+ * Real-world grounding panel — genuine browser geolocation + live Open-Meteo
+ * weather, no Mistral involved (it has no location/weather tool of its own).
+ * hasWeatherFlag gates whether we say the flag was actually applied to this
+ * pattern's scenario, since only the gym pattern currently has isRaining.
+ */
+function renderRealWorldPanel(hasWeatherFlag: boolean): string {
+  if (realWorldBusy) {
+    return `<div class="realworld-panel"><div class="evolving">Getting your location and current weather…</div></div>`
+  }
+  if (realWorld) {
+    const r = realWorld
+    return `<div class="realworld-panel">
+      <div class="realworld-head">
+        <span>📍 REAL-WORLD DATA · ${esc(r.placeLabel)}</span>
+        <button class="ghost-link" data-action="clear-realworld">use scenario instead</button>
+      </div>
+      <div class="realworld-body">
+        <iframe class="realworld-map" src="${esc(osmEmbedUrl(r.latitude, r.longitude))}" loading="lazy" referrerpolicy="no-referrer"></iframe>
+        <div class="realworld-facts">
+          <span>${r.isRaining ? '🌧️' : r.isDay ? '☀️' : '🌙'} ${r.temperatureC.toFixed(0)}°C</span>
+          <span>${r.isRaining ? 'Raining now' : 'Not raining'}</span>
+          <span>🕐 ${formatClock(r.clockMin)} locally</span>
+          ${hasWeatherFlag ? '<span class="realworld-applied">isRaining flag set from live weather ✓</span>' : '<span class="realworld-note">This pattern has no weather flag — shown for context only.</span>'}
+        </div>
+      </div>
+    </div>`
+  }
+  return `<div class="realworld-cta">
+    <button class="ghost-link" data-action="use-realworld">🌍 Use my real location, weather &amp; time instead</button>
+    ${realWorldError ? `<p class="realworld-error">${esc(realWorldError)}</p>` : ''}
+  </div>`
+}
+
 function renderSimulate(): string {
   const a = store.activeAgent() ?? draftAgent
   if (!a) return `<section class="screen"><p class="lede">Build an agent first.</p><button class="primary-action" data-action="to-choose">Start →</button></section>`
@@ -435,19 +473,21 @@ function renderSimulate(): string {
   </div>`
 
   if (simPhase === 'predicting') {
+    const hasWeatherFlag = p.flags.some((f) => f.id === 'isRaining')
     return `<section class="screen sim-screen">
       <div class="eyebrow">ACT III / ${isReplaying ? 'REPLAY — SAME SCENARIO, EDITED RULE' : 'PREDICT'} · ${scenario.kind.toUpperCase()} CASE</div>
       <h2>${isReplaying ? 'Same case, new rule —' : 'Before you look —'}<br><em>will it fire?</em></h2>
       ${isReplaying ? '<p class="lede">This is the exact scenario that failed before. Predict again with your edited rule.</p>' : ''}
       ${ruleSummary}
       <div class="scenario-card">
-        <div class="scenario-tag">${esc(scenario.title)}</div>
+        <div class="scenario-tag">${esc(scenario.title)}${realWorld ? ' · LIVE' : ''}</div>
         <p class="scenario-scene">${esc(scenario.sceneText)}</p>
         <div class="scenario-facts">
           <span>🕐 ${formatClock(scenario.clockMin)}</span>
           ${Object.entries(scenario.flags).map(([k, v]) => `<span class="fact-flag ${v ? 'on' : 'off'}">${esc(p.flags.find((f) => f.id === k)?.label ?? k)}: ${v ? 'YES' : 'NO'}</span>`).join('')}
         </div>
       </div>
+      ${renderRealWorldPanel(hasWeatherFlag)}
       ${simBusy ? `<div class="evolving">Checking the engine…</div>` : ''}
       <div class="predict-actions">
         <button class="predict-btn fire ${simBusy ? 'disabled' : ''}" data-predict="true" ${simBusy ? 'disabled' : ''}>It fires <span>✓</span></button>
@@ -458,12 +498,39 @@ function renderSimulate(): string {
 
   // revealed
   const trace = narratedResult!.trace
-  const result = scoreAgent(trace, currentScenario!.expectedFire)
+  const isLive = scenario.kind === 'live'
+  const result = isLive ? null : scoreAgent(trace, currentScenario!.expectedFire)
   const predictionCorrect = trace.fired === userPrediction
-  const meta = predictionMeta(result)
+  const meta = result ? predictionMeta(result) : null
+
+  const traceTable = `<div class="trace-table">
+      <div class="trace-row trace-head"><span>CHECK</span><span>RESULT</span></div>
+      ${trace.conditions.map((c) => `<div class="trace-row"><span>IF ${esc(describeCondition(c.condition, p.flags))}</span><span class="${c.met ? 'trace-true' : 'trace-false'}">${c.met ? 'TRUE' : 'FALSE'}</span></div>`).join('')}
+      ${trace.exceptions.map((e) => `<div class="trace-row"><span>UNLESS ${esc(describeCondition(e.condition, p.flags))}</span><span class="${e.met ? 'trace-true' : 'trace-false'}">${e.met ? 'TRUE (suppresses)' : 'FALSE'}</span></div>`).join('')}
+      <div class="trace-row trace-verdict"><span>FIRED?</span><span class="${trace.fired ? 'trace-true' : 'trace-false'}">${trace.fired ? 'YES' : 'NO'}</span></div>
+    </div>`
+
+  if (isLive) {
+    return `<section class="screen sim-screen">
+      <div class="eyebrow">ACT III / LIVE REVEAL · YOUR ACTUAL CONDITIONS</div>
+      <div class="sim-source live">● REAL LOCATION + WEATHER — no scripted answer to compare to</div>
+      <h2>Right now,<br><em>this is what your agent does.</em></h2>
+      ${ruleSummary}
+      <div class="scenario-card"><p class="scenario-scene">${esc(narratedResult!.sceneNarration)}</p></div>
+      ${traceTable}
+      <div class="compare-banner tone-mute">
+        <b>Your prediction was ${predictionCorrect ? 'correct' : 'different from the actual result'}.</b> There's no authored "right answer" for a real moment — this shows exactly what your rule does with reality's actual numbers plugged in, right now.
+      </div>
+      <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
+      <div class="sim-controls">
+        <button class="secondary-action" data-action="clear-realworld">Back to authored scenarios <span>→</span></button>
+        <button class="primary-action" data-action="use-realworld">Refresh real conditions <span>↻</span></button>
+      </div>
+    </section>`
+  }
 
   return `<section class="screen sim-screen">
-    <div class="eyebrow">ACT III / REVEAL · VERDICT: ${meta.label.toUpperCase()}</div>
+    <div class="eyebrow">ACT III / REVEAL · VERDICT: ${meta!.label.toUpperCase()}</div>
     ${narratedResult!.live ? '<div class="sim-source live">● NARRATED BY MISTRAL — verdict is deterministic either way</div>' : `<div class="sim-source scripted">○ SCRIPTED EXPLANATION${narratedResult!.fallbackReason ? ' — ' + esc(narratedResult!.fallbackReason) : ''}</div>`}
     <h2>Here's exactly<br><em>why.</em></h2>
     ${ruleSummary}
@@ -472,15 +539,10 @@ function renderSimulate(): string {
       <p class="scenario-scene">${esc(narratedResult!.sceneNarration)}</p>
     </div>
 
-    <div class="trace-table">
-      <div class="trace-row trace-head"><span>CHECK</span><span>RESULT</span></div>
-      ${trace.conditions.map((c) => `<div class="trace-row"><span>IF ${esc(describeCondition(c.condition, p.flags))}</span><span class="${c.met ? 'trace-true' : 'trace-false'}">${c.met ? 'TRUE' : 'FALSE'}</span></div>`).join('')}
-      ${trace.exceptions.map((e) => `<div class="trace-row"><span>UNLESS ${esc(describeCondition(e.condition, p.flags))}</span><span class="${e.met ? 'trace-true' : 'trace-false'}">${e.met ? 'TRUE (suppresses)' : 'FALSE'}</span></div>`).join('')}
-      <div class="trace-row trace-verdict"><span>FIRED?</span><span class="${trace.fired ? 'trace-true' : 'trace-false'}">${trace.fired ? 'YES' : 'NO'}</span></div>
-    </div>
+    ${traceTable}
 
-    <div class="compare-banner tone-${meta.tone}">
-      <b>Your prediction was ${predictionCorrect ? 'correct' : 'not quite'}.</b> ${meta.label === 'Correct' ? 'The helper behaved correctly for this case.' : meta.label === 'Missed' ? 'The helper should have fired here but stayed quiet — it needs a broader condition or one fewer exception.' : 'The helper fired here but should have stayed quiet — it needs a narrower condition or a new exception.'}
+    <div class="compare-banner tone-${meta!.tone}">
+      <b>Your prediction was ${predictionCorrect ? 'correct' : 'not quite'}.</b> ${meta!.label === 'Correct' ? 'The helper behaved correctly for this case.' : meta!.label === 'Missed' ? 'The helper should have fired here but stayed quiet — it needs a broader condition or one fewer exception.' : 'The helper fired here but should have stayed quiet — it needs a narrower condition or a new exception.'}
     </div>
 
     <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
@@ -625,6 +687,7 @@ function renderSettings(): string {
     <div class="modal">
       <div class="modal-head"><h3>Mistral API key</h3><button data-action="close-settings">✕</button></div>
       <p class="modal-p">Mistral only NARRATES the deterministic verdict and proposes candidate edits — it never decides whether a rule fires; the engine does that with plain code, with or without a key. The coach can also search the web for real citations when you ask something like "is this real?" Your key is stored only in this browser's localStorage and sent straight to Mistral.</p>
+      <p class="modal-p">"Use my real location" in the simulator is separate from Mistral entirely — it asks your browser for location, then queries the free <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> weather API and embeds a public <a href="https://www.openstreetmap.org" target="_blank" rel="noopener">OpenStreetMap</a> view. No key, no account, nothing sent to Mistral.</p>
       <p class="modal-p"><a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">Get a Mistral key →</a></p>
       <label class="modal-field"><span>API key</span>
         <input type="password" data-settings-key placeholder="${masked || 'Mistral key…'}" autocomplete="off" />
@@ -776,6 +839,8 @@ modalRoot.addEventListener('click', async (event) => {
     currentScenario = null
     narratedResult = null
     pendingEvolution = null
+    realWorld = null
+    realWorldError = ''
     lessonIndex = 0; lessonPicked = null; lessonRevealed = false
     phase = 'home'
     render()
@@ -875,6 +940,8 @@ app.addEventListener('click', async (event) => {
     isReplaying = !!scenarioToReplay
     scenarioToReplay = null
     narratedResult = null
+    realWorld = null
+    realWorldError = ''
     simPhase = 'predicting'
     userPrediction = null
     go('simulate')
@@ -895,6 +962,8 @@ app.addEventListener('click', async (event) => {
     // when "Repair this rule" was clicked — switching patterns invalidates it.
     scenarioToReplay = null
     isReplaying = false
+    realWorld = null
+    realWorldError = ''
     go('decode')
     return
   }
@@ -965,6 +1034,7 @@ app.addEventListener('click', async (event) => {
     currentScenario = null
     isReplaying = false
     narratedResult = null
+    realWorld = null
     simPhase = 'predicting'
     userPrediction = null
     render()
@@ -972,6 +1042,17 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'sim-stress') {
     await doStressScenario()
+    return
+  }
+  if (action === 'use-realworld') {
+    await doUseRealWorld()
+    return
+  }
+  if (action === 'clear-realworld') {
+    realWorld = null
+    realWorldError = ''
+    currentScenario = null // re-pick a normal authored scenario
+    render()
     return
   }
   if (action === 'sim-repair') {
@@ -1039,24 +1120,74 @@ async function doReveal() {
     narratedResult = await runScenario(agent, getPattern(agent.patternId), currentScenario, abort.signal)
     simPhase = 'revealed'
     const trace = narratedResult.trace
-    const result: PredictionResult = scoreAgent(trace, currentScenario.expectedFire)
-    const predictionCorrect = trace.fired === userPrediction
-    const updated = store.recordScenarioRun({
-      at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
-      userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
-    })
     if (narratedResult.fallbackReason) showToast(`Mistral unavailable: ${narratedResult.fallbackReason}`)
-    if (result !== 'correct' && updated) {
-      evolving = true
-      render()
-      pendingEvolution = await proposeEvolution(updated, getPattern(updated.patternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
-      evolving = false
+
+    if (currentScenario.kind === 'live') {
+      // A real-world moment has no trustworthy expectedFire to score against —
+      // show the trace as pure observation, but don't record it as evidence
+      // and don't let it drive an evolution proposal off a fabricated verdict.
+    } else {
+      const result: PredictionResult = scoreAgent(trace, currentScenario.expectedFire)
+      const predictionCorrect = trace.fired === userPrediction
+      const updated = store.recordScenarioRun({
+        at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
+        userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
+      })
+      if (result !== 'correct' && updated) {
+        evolving = true
+        render()
+        pendingEvolution = await proposeEvolution(updated, getPattern(updated.patternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
+        evolving = false
+      }
     }
   } catch (e) {
     if ((e as Error).name !== 'AbortError') showToast('Error: ' + (e as Error).message)
   } finally {
     simBusy = false
     abort = null
+    render()
+  }
+}
+
+async function doUseRealWorld() {
+  const agent = store.activeAgent() ?? draftAgent
+  if (!agent || !currentScenario) return
+  const p = getPattern(agent.patternId)
+  realWorldBusy = true
+  realWorldError = ''
+  render()
+  try {
+    const ctx = await fetchRealWorldContext()
+    realWorld = ctx
+    // Build a live scenario: same identity/action-relevant title as the current
+    // one, but clock/day/weather come from reality. Ground truth (expectedFire)
+    // for a live scenario is unknown in advance — the engine still decides
+    // exactly the same way, we just don't get to pre-validate it against an
+    // authored answer, so this scenario's outcome is recorded as an
+    // exploratory run rather than treated as unimpeachable ground truth.
+    const flags = { ...currentScenario.flags }
+    if (p.flags.some((f) => f.id === 'isRaining')) flags.isRaining = ctx.isRaining
+    currentScenario = {
+      ...currentScenario,
+      id: `realworld-${Date.now()}`,
+      kind: 'live',
+      title: 'Your real conditions, right now',
+      sceneText: `It's actually ${formatClock(ctx.clockMin)} where you are, ${ctx.temperatureC.toFixed(0)}°C${ctx.isRaining ? ' and raining' : ''}. This scenario uses your real location's weather and time instead of an authored one.`,
+      clockMin: ctx.clockMin,
+      dayOfWeek: ctx.dayOfWeek,
+      flags,
+      // No trustworthy ground truth exists for a live real-world moment — this
+      // value is never read because 'live' scenarios skip correctness scoring
+      // and never enter the regression corpus. See ScenarioKind's doc comment.
+      expectedFire: false,
+    }
+    narratedResult = null
+    simPhase = 'predicting'
+    userPrediction = null
+  } catch (e) {
+    realWorldError = e instanceof RealWorldError ? e.message : 'Could not get real-world data. Using the scenario as authored.'
+  } finally {
+    realWorldBusy = false
     render()
   }
 }

@@ -255,6 +255,18 @@ h1, h2, h3, p { margin: 0; }
 .sim-controls { margin-top: 22px; display: flex; gap: 10px; flex-wrap: wrap; }
 .sim-note { margin-top: 14px; color: var(--dim); font: 11px 'DM Mono'; }
 
+/* ---------- real-world grounding ---------- */
+.realworld-cta { margin-top: 16px; }
+.realworld-error { color: var(--bad); font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+.realworld-panel { margin-top: 16px; border: 1px solid rgba(130, 212, 250, .35); background: rgba(130, 212, 250, .04); border-radius: 10px; padding: 18px; }
+.realworld-head { display: flex; justify-content: space-between; align-items: center; font: 10px 'DM Mono'; letter-spacing: .08em; color: var(--blue); }
+.realworld-body { display: grid; grid-template-columns: 140px 1fr; gap: 14px; margin-top: 14px; align-items: stretch; }
+.realworld-map { width: 100%; height: 110px; border: 0; border-radius: 6px; }
+.realworld-facts { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.realworld-facts span { font-size: 12.5px; color: #d0cdc4; }
+.realworld-applied { color: var(--good) !important; font: 10px 'DM Mono' !important; }
+.realworld-note { color: var(--dim) !important; font-size: 10.5px !important; }
+
 /* ---------- evolve ---------- */
 .evolve-screen { max-width: 940px; }
 .agent-full { margin-top: 26px; border: 1px solid #4c4c42; border-radius: 10px; background: var(--panel); overflow: hidden; }
@@ -443,4 +455,6 @@ h1, h2, h3, p { margin: 0; }
   .sim-controls .primary-action, .sim-controls .secondary-action { flex: 1; }
   .predict-btn { min-width: 0; }
   .trace-row, .regression-row { grid-template-columns: 1fr; gap: 4px; }
+  .realworld-body { grid-template-columns: 1fr; }
+  .realworld-map { height: 140px; }
 }

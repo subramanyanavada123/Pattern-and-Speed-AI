@@ -22,7 +22,11 @@ export type ActionSpec = {
   description: string
 }
 
-export type ScenarioKind = 'normal' | 'edge' | 'exception' | 'stress'
+/** 'live' = built from real-world data (location/weather/time) — there is no
+ * trustworthy expectedFire for it, so it's shown and matched like any other
+ * scenario but never scored as correct/incorrect and never enters the
+ * regression corpus, which requires a reliable ground truth by definition. */
+export type ScenarioKind = 'normal' | 'edge' | 'exception' | 'stress' | 'live'
 
 export type Scenario = {
   id: string
