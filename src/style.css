@@ -357,6 +357,32 @@ h1, h2, h3, p { margin: 0; }
 .team-card-output { color: #d0cdc4; font-size: 13px; line-height: 1.55; margin-top: 12px; }
 .team-card-output-error { color: var(--bad); }
 @media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
+.team-card-category { display: inline-block; margin-top: 8px; font: 10px 'DM Mono'; color: var(--lime); text-transform: uppercase; letter-spacing: .04em; }
+.lede.small { font-size: 12.5px; margin-top: 10px; }
+
+.team-tabs { display: flex; gap: 8px; margin-top: 24px; border-bottom: 1px solid #34342e; }
+.team-tab { background: none; border: none; color: var(--dim); font: 600 13px 'Space Grotesk'; padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.team-tab.active { color: var(--paper); border-bottom-color: var(--lime); }
+.team-tab:hover:not(.active) { color: var(--muted); }
+
+.schedule-form { margin-top: 20px; border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.schedule-field { display: flex; flex-direction: column; gap: 6px; font: 11px 'DM Mono'; color: var(--dim); text-transform: uppercase; letter-spacing: .03em; }
+.schedule-field select, .schedule-field input, .schedule-field textarea {
+  font: 13px 'Space Grotesk'; text-transform: none; letter-spacing: normal; color: var(--paper);
+  background: #0f0f0d; border: 1px solid #2f2f2a; border-radius: 6px; padding: 9px 11px; resize: vertical;
+}
+.schedule-field select:focus, .schedule-field input:focus, .schedule-field textarea:focus { outline: none; border-color: var(--lime); }
+.schedule-role-desc { color: var(--muted); font-size: 12px; font-style: italic; margin-top: -8px; }
+
+.schedule-list { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
+.schedule-card { border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 16px 18px; }
+.schedule-card.schedule-card-needs-key { border-color: rgba(255, 200, 87, .4); }
+.schedule-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.schedule-card-head b { font: 600 14px 'Space Grotesk'; }
+.schedule-card-category { font: 10px 'DM Mono'; color: var(--lime); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.schedule-card-meta { color: var(--dim); font: 11px 'DM Mono'; margin-top: 6px; }
+.schedule-card-warning { color: var(--warn); font-size: 12px; margin-top: 10px; }
+.schedule-delete { display: block; margin-top: 10px; font-size: 11.5px; color: var(--bad); }
 
 .evolve-screen { max-width: 940px; }
 .agent-full { margin-top: 26px; border: 1px solid #4c4c42; border-radius: 10px; background: var(--panel); overflow: hidden; }

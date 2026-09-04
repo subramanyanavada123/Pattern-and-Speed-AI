@@ -13,30 +13,49 @@ genuinely parallel outbound calls with independent lifecycles).
 Run locally:
     pip install -r requirements.txt
     uvicorn main:app --reload --port 8787
+
+Deploy for real (not just localhost):
+    This process must stay alive to keep APScheduler's real background jobs
+    firing, so it needs an always-on host, not a serverless one — Vercel
+    cannot run this (its functions are stateless and short-lived; a
+    persistent in-process scheduler thread would just die between
+    invocations). Render, Railway, and Fly.io all support a real long-lived
+    Python process on a real free/cheap tier. See backend/README.md.
+
+    Set ALLOWED_ORIGINS to your deployed frontend's origin(s), comma-separated:
+        ALLOWED_ORIGINS=https://your-app.vercel.app uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 
 from __future__ import annotations
+
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from agents.orchestrator import AVAILABLE_ROLES, orchestrate
+from agents.orchestrator import orchestrate
+from agents.roster import ALL_AGENTS, CATEGORIES
+from scheduler import store as schedule_store
 
 app = FastAPI(title="Pattern Machine Agent Backend", version="0.1.0")
 
 # The Vite dev server runs on localhost:5173 by default; allow it (and the
-# common alternate ports Vite falls back to) to call this API directly from
-# the browser. No credentials are needed since the API key travels in the
-# request body, not a cookie.
+# common alternate ports Vite falls back to) plus whatever real deployed
+# frontend origin(s) are named in ALLOWED_ORIGINS (comma-separated — e.g.
+# your Vercel URL) so a deployed frontend can call a deployed backend too.
+# No credentials are needed since the API key travels in the request body,
+# not a cookie.
+_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173", "http://127.0.0.1:5173",
         "http://localhost:5174", "http://127.0.0.1:5174",
         "http://localhost:5175", "http://127.0.0.1:5175",
+        *_extra_origins,
     ],
-    allow_methods=["POST", "GET"],
+    allow_methods=["POST", "GET", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -59,13 +78,30 @@ class OrchestrateResponse(BaseModel):
     plan_reasoning: str
     plan_error: str | None
     selected_roles: list[str]
+    role_categories: dict[str, str]
     sub_agents: list[SubAgentResponse]
     total_duration_ms: int
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "available_roles": list(AVAILABLE_ROLES.keys())}
+    return {
+        "status": "ok",
+        "agent_count": len(ALL_AGENTS),
+        "categories": {category: list(agents.keys()) for category, agents in CATEGORIES.items()},
+    }
+
+
+@app.get("/roster")
+async def roster() -> dict:
+    """The full real roster with human-readable roles, grouped by category —
+    lets the frontend render a live picker instead of a hardcoded list."""
+    return {
+        "categories": {
+            category: [{"key": key, "name": agent.name, "role": agent.role} for key, agent in agents.items()]
+            for category, agents in CATEGORIES.items()
+        }
+    }
 
 
 @app.post("/orchestrate", response_model=OrchestrateResponse)
@@ -89,6 +125,7 @@ async def orchestrate_pattern(req: OrchestrateRequest) -> OrchestrateResponse:
         plan_reasoning=result.plan_reasoning,
         plan_error=result.plan_error,
         selected_roles=result.selected_roles,
+        role_categories=result.role_categories or {},
         sub_agents=[
             SubAgentResponse(
                 agent_name=r.agent_name, role=r.role, output=r.output,
@@ -98,3 +135,87 @@ async def orchestrate_pattern(req: OrchestrateRequest) -> OrchestrateResponse:
         ],
         total_duration_ms=result.total_duration_ms,
     )
+
+
+# ---- Real background scheduling (APScheduler) ----
+#
+# Job DEFINITIONS persist to schedules.json (role, interval, label, context);
+# the Mistral API key is held ONLY in memory per job and is never written to
+# disk. After a backend restart, a reloaded job comes back with needs_key:
+# true until the frontend calls /schedule/{id}/resume with the key again.
+
+
+class CreateScheduleRequest(BaseModel):
+    role: str = Field(..., description="A roster agent key, e.g. 'news-digest'")
+    label: str = Field(..., min_length=1, max_length=120)
+    interval_minutes: int = Field(..., ge=5, le=10080, description="How often to actually re-run this agent, in real minutes")
+    context: str = Field(default="", max_length=2000, description="What to pass the agent each run, e.g. your interest area")
+    mistral_api_key: str = Field(..., min_length=10)
+    model: str = Field(default="mistral-small-latest")
+
+
+class ResumeScheduleRequest(BaseModel):
+    mistral_api_key: str = Field(..., min_length=10)
+
+
+class ScheduledJobResponse(BaseModel):
+    id: str
+    role: str
+    role_name: str
+    category: str
+    label: str
+    interval_minutes: int
+    context: str
+    created_at: float
+    last_run_at: float | None
+    last_output: str | None
+    last_error: str | None
+    needs_key: bool
+
+
+def _job_to_response(job) -> ScheduledJobResponse:
+    agent = ALL_AGENTS.get(job.role)
+    return ScheduledJobResponse(
+        id=job.id, role=job.role, role_name=agent.name if agent else job.role,
+        category=job.category(), label=job.label, interval_minutes=job.interval_minutes,
+        context=job.context, created_at=job.created_at, last_run_at=job.last_run_at,
+        last_output=job.last_output, last_error=job.last_error, needs_key=job.needs_key,
+    )
+
+
+@app.post("/schedule", response_model=ScheduledJobResponse)
+async def create_schedule(req: CreateScheduleRequest) -> ScheduledJobResponse:
+    """Creates a REAL recurring job: APScheduler actually re-runs the chosen
+    agent every interval_minutes in this process, independent of any open
+    browser tab. Runs once immediately so you see a real result right away."""
+    try:
+        job = schedule_store.create(
+            role=req.role, label=req.label, interval_minutes=req.interval_minutes,
+            context=req.context, model=req.model, api_key=req.mistral_api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _job_to_response(job)
+
+
+@app.get("/schedule")
+async def list_schedules() -> dict:
+    return {"jobs": [_job_to_response(j) for j in schedule_store.list()]}
+
+
+@app.post("/schedule/{job_id}/resume", response_model=ScheduledJobResponse)
+async def resume_schedule(job_id: str, req: ResumeScheduleRequest) -> ScheduledJobResponse:
+    """After a backend restart, a schedule's definition survives but its key
+    doesn't (never persisted) — call this once to resupply it and pick the
+    real interval back up."""
+    try:
+        job = schedule_store.resume(job_id, req.mistral_api_key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such scheduled job.")
+    return _job_to_response(job)
+
+
+@app.delete("/schedule/{job_id}")
+async def delete_schedule(job_id: str) -> dict:
+    schedule_store.delete(job_id)
+    return {"status": "deleted", "id": job_id}

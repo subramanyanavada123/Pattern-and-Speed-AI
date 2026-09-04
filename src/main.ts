@@ -9,7 +9,11 @@ import { proposeEvolution, predictionMeta } from './evolve'
 import { testKey, listModels, type ModelInfo, type Citation } from './mistral'
 import { scoreAgent, describeCondition, formatClock } from './engine'
 import { fetchRealWorldContext, osmEmbedUrl, RealWorldError, type RealWorldContext } from './realworld'
-import { orchestratePattern, isBackendUp, knownBackendState, BackendError, type OrchestrationResult } from './backend'
+import {
+  orchestratePattern, isBackendUp, knownBackendState, BackendError, type OrchestrationResult,
+  fetchRoster, createSchedule, listSchedules, resumeSchedule, deleteSchedule,
+  type RosterCategories, type ScheduledJob,
+} from './backend'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -51,6 +55,19 @@ let teamBusy = false
 let teamError = ''
 let teamResult: OrchestrationResult | null = null
 let teamBackendChecked = false
+
+// ---- Team sub-tab (spawn once vs. schedule real recurring runs) + live roster
+let teamTab: 'spawn' | 'schedule' = 'spawn'
+let roster: RosterCategories | null = null
+let rosterLoading = false
+let schedules: ScheduledJob[] = []
+let schedulesLoading = false
+let scheduleBusy = false
+let scheduleError = ''
+let scheduleFormRole = ''
+let scheduleFormLabel = ''
+let scheduleFormInterval = 60
+let scheduleFormContext = ''
 
 // ---- simulate (predict / reveal / compare / repair / replay) ----
 type SimPhase = 'predicting' | 'revealed'
@@ -707,13 +724,16 @@ function renderTeam(): string {
     // doesn't block rendering, just informs the CTA state on the next render.
     void checkTeamBackend()
   }
+  if (teamBackendChecked && knownBackendState() && !roster && !rosterLoading) void loadRoster()
+  if (teamTab === 'schedule' && teamBackendChecked && knownBackendState() && schedules.length === 0 && !schedulesLoading) void loadSchedules()
 
   const backendState = knownBackendState()
+  const agentCount = roster ? Object.values(roster).reduce((n, list) => n + list.length, 0) : null
 
   return `<section class="screen team-screen">
     <div class="eyebrow">REAL AGENTS · SEPARATE PYTHON BACKEND</div>
-    <h2>Spawn a real<br><em>team of agents.</em></h2>
-    <p class="lede">This calls an actual FastAPI process running on your machine — not a browser simulation. It plans which specialist agents your pattern needs, then runs them as genuinely concurrent, independent processes, each with its own Mistral call.</p>
+    <h2>A real<br><em>team of agents.</em></h2>
+    <p class="lede">This calls an actual FastAPI process running on your machine — not a browser simulation.${agentCount ? ` <b>${agentCount} real agents</b> across ${Object.keys(roster!).length} categories are live right now — LLM calls, real web search, and real local computation (pandas, sklearn, sandboxed code execution) mixed freely.` : ''}</p>
 
     <div class="team-source-card">
       <span class="eyebrow">PATTERN GOING IN</span>
@@ -730,14 +750,28 @@ uvicorn main:app --reload --port 8787</pre>
       </div>
     ` : ''}
 
+    ${backendState ? `
+      <div class="team-tabs">
+        <button class="team-tab ${teamTab === 'spawn' ? 'active' : ''}" data-action="team-tab-spawn">Spawn once</button>
+        <button class="team-tab ${teamTab === 'schedule' ? 'active' : ''}" data-action="team-tab-schedule">Schedule recurring ${schedules.length ? `(${schedules.length})` : ''}</button>
+      </div>
+    ` : ''}
+
+    ${backendState && teamTab === 'spawn' ? renderTeamSpawnTab(description) : ''}
+    ${backendState && teamTab === 'schedule' ? renderTeamScheduleTab(description) : ''}
+  </section>`
+}
+
+function renderTeamSpawnTab(_description: string): string {
+  return `
     ${teamError ? `<p class="team-error">${esc(teamError)}</p>` : ''}
 
-    <button class="primary-action big ${teamBusy || backendState === false ? 'disabled' : ''}" data-action="run-team" ${teamBusy || backendState === false ? 'disabled' : ''}>
+    <button class="primary-action big ${teamBusy ? 'disabled' : ''}" data-action="run-team" ${teamBusy ? 'disabled' : ''}>
       ${teamBusy ? 'Orchestrating — real agents running…' : 'Spawn the team'} <span>→</span>
     </button>
 
     ${teamResult ? renderTeamResult(teamResult) : ''}
-  </section>`
+  `
 }
 
 function renderTeamResult(result: OrchestrationResult): string {
@@ -749,21 +783,126 @@ function renderTeamResult(result: OrchestrationResult): string {
       <p class="team-timing">Selected ${result.selectedRoles.length} agent${result.selectedRoles.length === 1 ? '' : 's'} · ran in ${result.totalDurationMs}ms total (concurrently, not summed)</p>
     </div>
     <div class="team-grid">
-      ${result.subAgents.map((a) => `
+      ${result.subAgents.map((a, i) => {
+        const role = result.selectedRoles[i]
+        const category = role ? result.roleCategories[role] : ''
+        return `
         <div class="team-card ${a.error ? 'team-card-error' : ''}">
           <div class="team-card-head"><b>${esc(a.agentName)}</b><span>${a.durationMs}ms</span></div>
+          ${category ? `<span class="team-card-category">${esc(category)}</span>` : ''}
           <p class="team-card-role">${esc(a.role)}</p>
           ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>`}
         </div>
-      `).join('')}
+      `}).join('')}
     </div>
   </div>`
+}
+
+function renderTeamScheduleTab(description: string): string {
+  const roleOptions = roster
+    ? Object.entries(roster).flatMap(([category, agents]) => agents.map((a) => ({ category, ...a })))
+    : []
+  const selectedRole = roleOptions.find((r) => r.key === scheduleFormRole) ?? roleOptions[0]
+
+  return `
+    <p class="lede small">A scheduled agent keeps running on a real interval inside the backend process — via APScheduler, a real Python job scheduler — even with this tab closed. Great for a News-Digest every few hours, or a Podcast-Recap once a day, instead of opening Instagram.</p>
+
+    <div class="schedule-form">
+      <label class="schedule-field">
+        <span>Which agent</span>
+        <select data-action="schedule-role-select">
+          ${roleOptions.map((r) => `<option value="${esc(r.key)}" ${r.key === (selectedRole?.key ?? '') ? 'selected' : ''}>${esc(r.category)} — ${esc(r.name)}</option>`).join('')}
+        </select>
+      </label>
+      ${selectedRole ? `<p class="schedule-role-desc">${esc(selectedRole.role)}</p>` : ''}
+
+      <label class="schedule-field">
+        <span>Label</span>
+        <input type="text" data-action="schedule-label-input" value="${esc(scheduleFormLabel)}" placeholder="e.g. Morning news digest" maxlength="120" />
+      </label>
+
+      <label class="schedule-field">
+        <span>Every</span>
+        <select data-action="schedule-interval-select">
+          ${[15, 30, 60, 120, 240, 480, 1440].map((m) => `<option value="${m}" ${m === scheduleFormInterval ? 'selected' : ''}>${m < 60 ? `${m} min` : m === 1440 ? 'day' : `${m / 60} hr`}</option>`).join('')}
+        </select>
+      </label>
+
+      <label class="schedule-field">
+        <span>Context (what to give the agent each run)</span>
+        <textarea data-action="schedule-context-input" rows="2" placeholder="e.g. topic: AI and robotics; or paste your pattern">${esc(scheduleFormContext || description)}</textarea>
+      </label>
+
+      ${scheduleError ? `<p class="team-error">${esc(scheduleError)}</p>` : ''}
+
+      <button class="primary-action ${scheduleBusy ? 'disabled' : ''}" data-action="schedule-create" ${scheduleBusy ? 'disabled' : ''}>
+        ${scheduleBusy ? 'Creating — running once now…' : 'Schedule it'} <span>→</span>
+      </button>
+    </div>
+
+    <div class="schedule-list">
+      <span class="eyebrow">${schedulesLoading ? 'LOADING REAL SCHEDULES…' : `LIVE SCHEDULED JOBS (${schedules.length})`}</span>
+      ${schedules.length === 0 && !schedulesLoading ? '<p class="lede small">No scheduled agents yet — create one above. It keeps firing on its real interval as long as the backend process is running.</p>' : ''}
+      ${schedules.map((j) => `
+        <div class="schedule-card ${j.needsKey ? 'schedule-card-needs-key' : ''}">
+          <div class="schedule-card-head">
+            <b>${esc(j.label)}</b>
+            <span class="schedule-card-category">${esc(j.category)}</span>
+          </div>
+          <p class="schedule-card-meta">${esc(j.roleName)} · every ${j.intervalMinutes < 60 ? `${j.intervalMinutes} min` : `${j.intervalMinutes / 60} hr`}${j.lastRunAt ? ` · last ran ${timeAgo(j.lastRunAt)}` : ' · not run yet'}</p>
+          ${j.needsKey ? `
+            <p class="schedule-card-warning">⚠ Backend restarted — this job's key wasn't kept (never stored on disk). Resume it to pick the real interval back up.</p>
+            <button class="secondary-action" data-action="schedule-resume" data-id="${esc(j.id)}">Resume with my key</button>
+          ` : j.lastError ? `
+            <p class="team-card-output team-card-output-error">✕ ${esc(j.lastError)}</p>
+          ` : j.lastOutput ? `
+            <p class="team-card-output">${esc(j.lastOutput)}</p>
+          ` : '<p class="lede small">Running…</p>'}
+          <button class="ghost-link schedule-delete" data-action="schedule-delete" data-id="${esc(j.id)}">Cancel this schedule</button>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+function timeAgo(unixSeconds: number): string {
+  const diffMs = Date.now() - unixSeconds * 1000
+  const mins = Math.round(diffMs / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.round(hrs / 24)}d ago`
 }
 
 async function checkTeamBackend() {
   teamBackendChecked = true
   await isBackendUp()
   render()
+}
+
+async function loadRoster() {
+  rosterLoading = true
+  try {
+    roster = await fetchRoster()
+  } catch {
+    roster = null
+  } finally {
+    rosterLoading = false
+    render()
+  }
+}
+
+async function loadSchedules() {
+  schedulesLoading = true
+  try {
+    schedules = await listSchedules()
+  } catch {
+    /* leave list as-is; backend-offline state is already shown elsewhere */
+  } finally {
+    schedulesLoading = false
+    render()
+  }
 }
 
 // ---------------------------------------------------------------- EVOLVE (evidence-gated)
@@ -1188,6 +1327,9 @@ app.addEventListener('click', async (event) => {
     teamResult = null
     teamError = ''
     teamBackendChecked = false
+    teamTab = 'spawn'
+    roster = null
+    scheduleError = ''
     go('team')
     return
   }
@@ -1198,6 +1340,19 @@ app.addEventListener('click', async (event) => {
   if (action === 'team-recheck') {
     teamBackendChecked = false
     render()
+    return
+  }
+  if (action === 'team-tab-spawn') { teamTab = 'spawn'; render(); return }
+  if (action === 'team-tab-schedule') { teamTab = 'schedule'; render(); return }
+  if (action === 'schedule-create') { await doCreateSchedule(); return }
+  if (action === 'schedule-resume') {
+    const id = actionEl?.dataset.id
+    if (id) await doResumeSchedule(id)
+    return
+  }
+  if (action === 'schedule-delete') {
+    const id = actionEl?.dataset.id
+    if (id) await doDeleteSchedule(id)
     return
   }
 
@@ -1403,6 +1558,17 @@ app.addEventListener('input', (event) => {
   if ((el as HTMLElement).id === 'discover-text') {
     discoverText = (el as HTMLTextAreaElement).value
   }
+  const action = el.dataset?.action
+  if (action === 'schedule-label-input') scheduleFormLabel = (el as HTMLInputElement).value
+  if (action === 'schedule-context-input') scheduleFormContext = (el as HTMLTextAreaElement).value
+})
+
+// select fields for the schedule form — 'change' fires reliably for <select>, unlike 'input' in some browsers
+app.addEventListener('change', (event) => {
+  const el = event.target as HTMLElement
+  const action = el.dataset?.action
+  if (action === 'schedule-role-select') { scheduleFormRole = (el as HTMLSelectElement).value; render() }
+  if (action === 'schedule-interval-select') scheduleFormInterval = Number((el as HTMLSelectElement).value)
 })
 
 /**
@@ -1554,6 +1720,63 @@ async function doRunTeam() {
     teamError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Something went wrong contacting the backend.'
   } finally {
     teamBusy = false
+    render()
+  }
+}
+
+async function doCreateSchedule() {
+  if (scheduleBusy) return
+  const p = getPattern(workingPatternId)
+  const description = p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`
+  const roleOptions = roster ? Object.entries(roster).flatMap(([category, agents]) => agents.map((a) => ({ category, ...a }))) : []
+  const role = scheduleFormRole || roleOptions[0]?.key
+  if (!role) { scheduleError = 'No roster loaded yet — check the backend connection.'; render(); return }
+  const chosen = roleOptions.find((r) => r.key === role)
+
+  scheduleBusy = true
+  scheduleError = ''
+  render()
+  try {
+    const job = await createSchedule({
+      role,
+      label: scheduleFormLabel.trim() || chosen?.name || role,
+      intervalMinutes: scheduleFormInterval,
+      context: scheduleFormContext.trim() || description,
+    })
+    schedules = [job, ...schedules.filter((j) => j.id !== job.id)]
+    scheduleFormLabel = ''
+  } catch (e) {
+    scheduleError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not create the schedule.'
+  } finally {
+    scheduleBusy = false
+    render()
+  }
+}
+
+async function doResumeSchedule(jobId: string) {
+  scheduleBusy = true
+  render()
+  try {
+    const job = await resumeSchedule(jobId)
+    schedules = schedules.map((j) => (j.id === jobId ? job : j))
+  } catch (e) {
+    scheduleError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not resume that schedule.'
+  } finally {
+    scheduleBusy = false
+    render()
+  }
+}
+
+async function doDeleteSchedule(jobId: string) {
+  scheduleBusy = true
+  render()
+  try {
+    await deleteSchedule(jobId)
+    schedules = schedules.filter((j) => j.id !== jobId)
+  } catch (e) {
+    scheduleError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not cancel that schedule.'
+  } finally {
+    scheduleBusy = false
     render()
   }
 }

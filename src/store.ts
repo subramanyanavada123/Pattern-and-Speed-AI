@@ -137,9 +137,9 @@ function reconcile(mine: SaveState, disk: SaveState): SaveState {
       agents[id] = agent
     }
   }
-  const customPatterns = [...disk.customPatterns]
+  const customPatterns = [...(Array.isArray(disk.customPatterns) ? disk.customPatterns : [])]
   const knownCustomIds = new Set(customPatterns.map((p) => p.id))
-  for (const p of mine.customPatterns) {
+  for (const p of Array.isArray(mine.customPatterns) ? mine.customPatterns : []) {
     if (!knownCustomIds.has(p.id)) customPatterns.push(p)
   }
   return {
