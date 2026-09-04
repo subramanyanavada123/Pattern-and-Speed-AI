@@ -42,6 +42,10 @@ let simPhase: SimPhase = 'predicting'
 let currentScenario: Scenario | null = null
 let userPrediction: boolean | null = null
 let narratedResult: NarratedResult | null = null
+/** Set by "Repair this rule" so returning to Simulate re-tests the SAME scenario that just failed, not a fresh one. */
+let scenarioToReplay: Scenario | null = null
+/** True for one predicting-phase render right after a repair round-trip, so the UI can say "replaying" instead of "predict". */
+let isReplaying = false
 let simBusy = false
 let pendingEvolution: Awaited<ReturnType<typeof proposeEvolution>> | null = null
 
@@ -398,8 +402,9 @@ function renderSimulate(): string {
 
   if (simPhase === 'predicting') {
     return `<section class="screen sim-screen">
-      <div class="eyebrow">ACT III / PREDICT · ${scenario.kind.toUpperCase()} CASE</div>
-      <h2>Before you look —<br><em>will it fire?</em></h2>
+      <div class="eyebrow">ACT III / ${isReplaying ? 'REPLAY — SAME SCENARIO, EDITED RULE' : 'PREDICT'} · ${scenario.kind.toUpperCase()} CASE</div>
+      <h2>${isReplaying ? 'Same case, new rule —' : 'Before you look —'}<br><em>will it fire?</em></h2>
+      ${isReplaying ? '<p class="lede">This is the exact scenario that failed before. Predict again with your edited rule.</p>' : ''}
       ${ruleSummary}
       <div class="scenario-card">
         <div class="scenario-tag">${esc(scenario.title)}</div>
@@ -772,8 +777,17 @@ app.addEventListener('click', async (event) => {
     return
   }
   if (action === 'to-simulate') {
-    if (draftAgent && !store.getAgent(workingPatternId)) store.saveAgent(draftAgent)
-    currentScenario = null
+    // Always persist an in-progress draft here — this is also the return path
+    // from "Repair this rule", where draftAgent holds edits to an ALREADY
+    // saved agent. Gating on "no saved agent yet" would silently discard
+    // those edits and run the simulator against stale rules.
+    if (draftAgent) store.saveAgent(draftAgent)
+    // Replay the SAME scenario that triggered a repair, so the user can see
+    // whether their edit actually fixed it — a fresh/random scenario would
+    // never confirm that. Otherwise start clean and let the simulator pick.
+    currentScenario = scenarioToReplay
+    isReplaying = !!scenarioToReplay
+    scenarioToReplay = null
     narratedResult = null
     simPhase = 'predicting'
     userPrediction = null
@@ -791,6 +805,10 @@ app.addEventListener('click', async (event) => {
     diagnosis = store.getAgent(patternId)?.diagnosis || ''
     draftAgent = null
     lessonIndex = 0; lessonPicked = null; lessonRevealed = false
+    // A pending repair-replay target belongs to whichever pattern was active
+    // when "Repair this rule" was clicked — switching patterns invalidates it.
+    scenarioToReplay = null
+    isReplaying = false
     go('decode')
     return
   }
@@ -859,6 +877,7 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'sim-next') {
     currentScenario = null
+    isReplaying = false
     narratedResult = null
     simPhase = 'predicting'
     userPrediction = null
@@ -871,6 +890,7 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'sim-repair') {
     draftAgent = store.activeAgent() ?? draftAgent
+    scenarioToReplay = currentScenario
     go('build')
     setTimeout(() => app.querySelector('.agent-builder')?.scrollIntoView({ behavior: 'smooth' }), 60)
     return
