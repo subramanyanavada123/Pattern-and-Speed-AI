@@ -1,11 +1,12 @@
 import './style.css'
-import type { Phase, PartId, DiagnosisId, Agent, SimEvent, CheckinOutcome } from './types'
+import type { Phase, PartId, DiagnosisId, Agent, Condition, RuleSet, PredictionResult, Scenario, RegressionCheck } from './types'
 import { patterns, getPattern, diagnosisCopy, lessonFor } from './patterns'
-import { store, newAgent, keyStore, onExternalSave } from './store'
+import { store, newAgent, keyStore, onExternalSave, justMigratedFromV2 } from './store'
 import { critique, reply } from './coach'
-import { runDay, rerunDay, surpriseTwist, type SimResult } from './simulator'
-import { proposeEvolution, outcomeMeta } from './evolve'
+import { runScenario, proposeStressScenario, pickNextScenario, type NarratedResult } from './simulator'
+import { proposeEvolution, predictionMeta } from './evolve'
 import { testKey, listModels, type ModelInfo } from './mistral'
+import { scorePrediction, describeCondition, formatClock } from './engine'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -26,19 +27,23 @@ let diagnosis: DiagnosisId | '' = ''
 let coachLog: { role: 'coach' | 'you'; text: string }[] = []
 let coachBusy = false
 let coachLive: boolean | null = null
-let simEvents: SimEvent[] = []
-let simRunning = false
-let simResult: SimResult | null = null
-let simTwist = ''
-let simRunCount = 0
 let settingsOpen = false
 let toast = ''
 let fetchedModels: ModelInfo[] | null = null
 let modelsLoading = false
 let modelsError = ''
-let pendingEvolution: Awaited<ReturnType<typeof proposeEvolution>> | null = null
 let evolving = false
 let abort: AbortController | null = null
+let migrationBannerDismissed = false
+
+// ---- simulate (predict / reveal / compare / repair / replay) ----
+type SimPhase = 'predicting' | 'revealed'
+let simPhase: SimPhase = 'predicting'
+let currentScenario: Scenario | null = null
+let userPrediction: boolean | null = null
+let narratedResult: NarratedResult | null = null
+let simBusy = false
+let pendingEvolution: Awaited<ReturnType<typeof proposeEvolution>> | null = null
 
 const LESSON_PARTS: PartId[] = ['perceive', 'decide', 'act', 'learn']
 
@@ -67,6 +72,17 @@ function go(next: Phase) {
   render()
 }
 
+/** Scenario ids the active agent has run where the deterministic verdict matched the scenario's ground truth. */
+function previouslyCorrectScenarioIds(agent: Agent): Set<string> {
+  const ids = new Set<string>()
+  for (const run of agent.scenarioLog) {
+    if (run.trace.fired === getPattern(agent.patternId).scenarios.find((s) => s.id === run.scenarioId)?.expectedFire) {
+      ids.add(run.scenarioId)
+    }
+  }
+  return ids
+}
+
 // ---------------------------------------------------------------- chrome
 
 function renderHeader(): string {
@@ -74,10 +90,18 @@ function renderHeader(): string {
   const live = keyStore.has()
   return `<header class="topbar">
     <a class="wordmark" href="#" data-action="home"><span class="wordmark-mark">✳</span> Pattern Machine</a>
-    <div class="mission"><span class="mission-dot"></span> Turn a loop that runs you into an agent that works for you</div>
+    <div class="mission"><span class="mission-dot"></span> Turn a loop that runs you into a deterministic agent</div>
     <button class="key-pill ${live ? 'on' : ''}" data-action="settings">${live ? '● MISTRAL LIVE' : '○ ADD MISTRAL KEY'}</button>
     <div class="xp"><span>${s.streak > 0 ? `🔥 ${s.streak}-DAY` : 'LEVEL 01'}</span><strong>${s.xp} XP</strong></div>
   </header>`
+}
+
+function renderMigrationBanner(): string {
+  if (!justMigratedFromV2 || migrationBannerDismissed || store.get().sawMigrationNotice) return ''
+  return `<div class="migration-banner">
+    <p><b>Pattern Machine got a rebuild.</b> Agents now run on real, checkable rules instead of free text — your old agents can't convert automatically, so they were reset. Your XP, streak, and lesson progress carried over. Rebuilding an agent takes about 2 minutes.</p>
+    <button data-action="dismiss-migration">Got it ✕</button>
+  </div>`
 }
 
 function renderRail(): string {
@@ -90,7 +114,6 @@ function renderRail(): string {
   ]
   const order = steps.map((s) => s[0])
   const cur = order.indexOf(phase)
-  const s = store.get()
   return `<aside class="sidebar">
     ${phase !== 'home' ? `<button class="back-home" data-action="home">← Home</button>` : ''}
     <div class="sidebar-title">YOUR RUN</div>
@@ -105,7 +128,7 @@ function renderRail(): string {
       <div class="score-eyebrow">AGENT STATUS</div>
       ${renderAgentMini()}
     </div>
-    ${s.checkins.length ? renderStreakChart() : `<div class="sidebar-note"><span>◈</span><p>A pattern is not a character flaw. It is a spec waiting for a better system.</p></div>`}
+    ${renderRunHistoryChart() || `<div class="sidebar-note"><span>◈</span><p>A pattern is not a character flaw. It is a spec waiting for a deterministic system.</p></div>`}
   </aside>`
 }
 
@@ -113,26 +136,29 @@ function renderAgentMini(): string {
   const a = store.activeAgent()
   if (!a) return `<p class="mini-empty">No agent yet. Build one — it will show up here and start evolving.</p>`
   const p = getPattern(a.patternId)
+  const action = p.actions.find((x) => x.id === a.rules.actionId)?.label ?? '—'
   return `<div class="agent-mini">
     <div class="agent-mini-head"><b>${esc(p.title)}</b><span class="ver">v${a.version}</span></div>
-    <div class="agent-mini-row"><i>sees</i> ${esc(clip(a.perceive, 60))}</div>
-    <div class="agent-mini-row"><i>does</i> ${esc(clip(a.act, 60))}</div>
-    <div class="agent-mini-foot">${a.history.length} evolution${a.history.length === 1 ? '' : 's'}</div>
+    <div class="agent-mini-row"><i>conditions</i> ${a.rules.conditions.length}</div>
+    <div class="agent-mini-row"><i>does</i> ${esc(clip(action, 60))}</div>
+    <div class="agent-mini-foot">${a.history.length} evolution${a.history.length === 1 ? '' : 's'} · ${a.scenarioLog.length} run${a.scenarioLog.length === 1 ? '' : 's'}</div>
   </div>`
 }
 
-function renderStreakChart(): string {
-  const last = store.checkinsLast(14)
+function renderRunHistoryChart(): string {
+  const a = store.activeAgent()
+  if (!a || !a.scenarioLog.length) return ''
+  const last = a.scenarioLog.slice(-14)
   const bars = last
-    .map((c) => {
-      const m = outcomeMeta(c.outcome)
+    .map((r) => {
+      const m = predictionMeta(r.predictionResult)
       return `<i class="tone-${m.tone}" title="${m.label}"></i>`
     })
     .join('')
   return `<div class="streak-chart">
-    <div class="score-eyebrow">LAST ${last.length} CHECK-INS</div>
+    <div class="score-eyebrow">LAST ${last.length} PREDICTIONS</div>
     <div class="streak-bars">${bars}</div>
-    <p>Come back tomorrow to keep the streak and let the agent learn from today.</p>
+    <p>Come back tomorrow to keep the streak and run against more scenarios.</p>
   </div>`
 }
 
@@ -153,10 +179,10 @@ function renderHome(): string {
     return `<section class="screen home-return">
       <div class="eyebrow">WELCOME BACK${away > 0 ? ` · ${away} DAY${away === 1 ? '' : 'S'} AWAY` : ''}</div>
       <h1>Your agent is<br><em>still running.</em></h1>
-      <p class="lede">${esc(getPattern(a!.patternId).title)} — version ${a!.version}, ${a!.history.length} evolution${a!.history.length === 1 ? '' : 's'} in. Feed it today's outcome and watch it adjust, or take it into another simulated day.</p>
+      <p class="lede">${esc(getPattern(a!.patternId).title)} — version ${a!.version}, ${a!.history.length} evolution${a!.history.length === 1 ? '' : 's'} in, tested against ${a!.scenarioLog.length} scenario${a!.scenarioLog.length === 1 ? '' : 's'}. Run it against a new case, or make it smarter from the evidence so far.</p>
       <div class="home-cards">
-        <button class="home-card accent" data-action="to-evolve"><span class="hc-k">DAILY</span><strong>Check in on today</strong><p>One tap. The agent rewrites a rule from what actually happened.</p><span class="hc-go">→</span></button>
-        <button class="home-card" data-action="to-simulate"><span class="hc-k">PRACTICE</span><strong>Run another day</strong><p>Watch the current version handle a fresh, harder scenario.</p><span class="hc-go">→</span></button>
+        <button class="home-card accent" data-action="to-simulate"><span class="hc-k">PREDICT</span><strong>Run another scenario</strong><p>Predict, reveal, and see exactly which condition decided it.</p><span class="hc-go">→</span></button>
+        <button class="home-card" data-action="to-evolve"><span class="hc-k">EVOLVE</span><strong>Review the evidence</strong><p>See every accepted edit, with before/after and regression checks.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-choose"><span class="hc-k">EXPAND</span><strong>Build a second agent</strong><p>${s.unlockedPatterns.length} loop${s.unlockedPatterns.length === 1 ? '' : 's'} unlocked. New ones open as you go.</p><span class="hc-go">→</span></button>
       </div>
     </section>`
@@ -165,16 +191,16 @@ function renderHome(): string {
   return `<section class="screen home-first">
     <div class="eyebrow">ACT I / SEE THE LOOP</div>
     <h1>Your day is a program<br><em>you didn't write.</em></h1>
-    <p class="lede">You are a <b>Pattern Detective</b>. Find a loop from everyday life, teach a tiny AI helper how to notice it, choose a move, and learn from what happens next. No perfect answers needed.</p>
+    <p class="lede">Pick a loop you recognise from student life, write it as a real deterministic rule — conditions, exceptions, one action — then watch a rule engine actually evaluate it against test scenarios. Not a chatbot narrating a story: code deciding whether your rule fires.</p>
     <div class="home-start">
       <button class="primary-action big" data-action="to-choose">Start with one loop <span>→</span></button>
-      <button class="ghost-link" data-action="settings">${keyStore.has() ? 'Mistral helper connected ·' : ''} ${keyStore.has() ? 'settings' : 'Add a Mistral key for the live helper'}</button>
+      <button class="ghost-link" data-action="settings">${keyStore.has() ? 'Mistral key connected ·' : ''} ${keyStore.has() ? 'settings' : 'Add a Mistral key for narration + coaching'}</button>
     </div>
     <div class="home-rail">
-      <div><span>01 / NOTICE</span>Spot what repeats</div>
-      <div><span>02 / PREDICT</span>Guess what happens next</div>
-      <div><span>03 / BUILD</span>Give your helper senses and hands</div>
-      <div><span>04 / TEST</span>Try it, learn, improve</div>
+      <div><span>01 / DECODE</span>Trigger, routine, reward, cost</div>
+      <div><span>02 / BUILD</span>Conditions, exceptions, one action</div>
+      <div><span>03 / PREDICT</span>Guess, then see the real verdict</div>
+      <div><span>04 / EVOLVE</span>Edit with regression checks, not guesses</div>
     </div>
   </section>`
 }
@@ -185,14 +211,14 @@ function renderChoose(): string {
   return `<section class="screen">
     <div class="eyebrow">ACT I / SEE THE LOOP</div>
     <h1>Which loop has<br>been <em>running you?</em></h1>
-    <p class="lede">Choose a loop you recognise from school, games, friends, or home. You are not being graded on the habit — you are investigating how the pattern works.</p>
+    <p class="lede">Pick the one that stings a little — that's usually the useful one. Locked loops open as you evolve an agent.</p>
     <div class="pattern-grid">${patterns
       .map((p, i) => {
         const locked = !store.isUnlocked(p.id)
         return `<button class="pattern-card ${p.color} ${locked ? 'locked' : ''}" data-pattern="${p.id}" ${locked ? 'disabled' : ''} style="--delay:${i * 45}ms">
           <span class="card-top"><span class="pattern-icon">${p.icon}</span><span class="pattern-label">${p.label}</span><span class="card-arrow">${locked ? '🔒' : '↗'}</span></span>
           <strong>${esc(p.title)}</strong>
-          <span class="card-trigger">${locked ? 'Finish an agent to unlock' : 'Trigger: ' + esc(p.trigger)}</span>
+          <span class="card-trigger">${locked ? 'Evolve an agent to unlock' : 'Trigger: ' + esc(p.trigger)}</span>
         </button>`
       })
       .join('')}</div>
@@ -211,7 +237,7 @@ function renderDecode(): string {
   return `<section class="screen">
     <div class="eyebrow">CHECKPOINT 01 / READ THE MACHINE</div>
     <div class="decode-heading">
-      <div><h2>Read your loop<br><em>like a detective.</em></h2><p class="lede">Every repeating pattern has four clues: what starts it, what you do, what you get, and what it costs later.</p></div>
+      <div><h2>Read your loop<br><em>like a machine.</em></h2><p class="lede">Every sticky pattern has four beats. Which one you pick decides what your rule focuses on.</p></div>
       <div class="selected-stamp ${p.color}"><span>${p.icon}</span><b>${esc(p.label)}</b><small>YOUR LOOP</small></div>
     </div>
     <div class="loop-strip">
@@ -229,12 +255,12 @@ function renderDecode(): string {
             <span><strong>${title}</strong><small>${sub}</small></span></button>`,
         )
         .join('')}</div>
-      <button class="primary-action ${diagnosis ? '' : 'disabled'}" data-action="to-build">Choose your experiment <span>→</span></button>
+      <button class="primary-action ${diagnosis ? '' : 'disabled'}" data-action="to-build">Take this into the build step <span>→</span></button>
     </div>
   </section>`
 }
 
-// ---------------------------------------------------------------- BUILD (lessons)
+// ---------------------------------------------------------------- BUILD (lessons + structured rule editor)
 
 function renderBuild(): string {
   const done = store.get().completedLessons
@@ -244,10 +270,14 @@ function renderBuild(): string {
 
   if (allDone && !draftAgent) draftAgent = draftAgent ?? seedAgent()
 
+  // Diagnosis makes the build screen mechanically different, not just framed differently:
+  // 'trigger' emphasises the conditions editor, 'routine' emphasises the action picker,
+  // 'reward' also emphasises the action picker (a substitute reward IS an action choice here).
+  const emphasis: DiagnosisId | '' = diagnosis
+
   return `<section class="screen build-screen">
-    <div class="eyebrow">ACT II / TRAIN YOUR HELPER · ${done.length}/4</div>
-    <h2>Teach your helper<br><em>how to think.</em></h2>
-    <div class="concept-strip"><div><b>NOTICE</b><span>What is happening?</span></div><i>→</i><div><b>THINK</b><span>What should happen?</span></div><i>→</i><div><b>DO</b><span>What small move helps?</span></div><i>→</i><div><b>REMEMBER</b><span>What did we learn?</span></div></div>
+    <div class="eyebrow">ACT II / PATTERN → AGENT · ${done.length}/4</div>
+    <h2>Build the parts that<br><em>move the decision</em> out of the hard moment.</h2>
     <div class="lesson-tabs">${LESSON_PARTS.map((pid, i) => {
       const l = lessonFor(pid)
       return `<button class="lesson-tab ${i === lessonIndex ? 'active' : ''} ${done.includes(pid) ? 'done' : ''}" data-lesson="${i}"><span>${done.includes(pid) ? '✓' : l.number}</span>${l.title}</button>`
@@ -281,7 +311,7 @@ function renderBuild(): string {
       </div>
     </article>
 
-    ${allDone ? renderAgentBuilder(p) : ''}
+    ${allDone ? renderRuleEditor(p, emphasis) : ''}
   </section>`
 }
 
@@ -296,161 +326,218 @@ function seedAgent(): Agent {
   return a
 }
 
-function renderAgentBuilder(p: ReturnType<typeof getPattern>): string {
+function conditionKey(c: Condition): string {
+  if (c.type === 'flag') return `flag:${c.flag}:${c.equals}`
+  if (c.type === 'time-in-range') return `time:${c.fromMin}:${c.toMin}`
+  return `day:${c.days.join(',')}`
+}
+
+function renderConditionPicker(pattern: ReturnType<typeof getPattern>, list: Condition[], listName: 'conditions' | 'exceptions'): string {
+  const activeKeys = new Set(list.map(conditionKey))
+  const pills = pattern.flags.map((f) => {
+    const cond: Condition = { type: 'flag', flag: f.id, equals: true }
+    const active = activeKeys.has(conditionKey(cond))
+    return `<button class="cond-pill ${active ? 'active' : ''}" data-cond-toggle="${listName}" data-cond-flag="${f.id}">${esc(f.label)}</button>`
+  }).join('')
+  return `<div class="cond-picker">${pills}</div>`
+}
+
+function renderRuleEditor(p: ReturnType<typeof getPattern>, emphasis: DiagnosisId | ''): string {
   const a = draftAgent!
-  const field = (key: keyof Agent, label: string, hint: string, ph: string) => `
-    <label class="ab-field">
-      <span class="ab-label">${label}<i>${hint}</i></span>
-      <textarea data-agent-field="${key}" rows="2" placeholder="${ph}">${esc(String(a[key] ?? ''))}</textarea>
-    </label>`
-  const ready = a.perceive.trim() && a.decide.trim() && a.act.trim()
+  const ready = a.rules.conditions.length > 0 && !!a.rules.actionId
   return `<div class="agent-builder">
-    <div class="ab-head"><span class="eyebrow">ASSEMBLE / HELPER FOR "${esc(p.title).toUpperCase()}"</span><h3>Build a tiny thinking machine.</h3><p>Every agent has four jobs: notice, think, do, and remember. Make each job small enough to test.</p></div>
-    ${field('perceive', 'Perceive / notice', 'a clue it can actually observe', 'e.g. the homework tab is open and no typing happened for 5 minutes')}
-    ${field('decide', 'Decide / think', 'IF <clue> THEN <one move>, plus an exception', 'IF stuck for 5 minutes THEN show one hint. EXCEPTION: class has ended.')}
-    ${field('act', 'Act / do', 'one small, reversible move', 'show one hint and start a 5-minute timer')}
-    ${field('learn', 'Learn / remember', 'what should change after a test', 'if the hint helped, keep it; if it annoyed me, make it smaller')}
+    <div class="ab-head"><span class="eyebrow">ASSEMBLE / AGENT FOR "${esc(p.title).toUpperCase()}"</span><h3>Write your rule.</h3><p>Pick from the pattern's fixed vocabulary — the engine checks these exactly, no interpretation involved.</p></div>
+
+    <div class="ab-field ${emphasis === 'trigger' ? 'ab-emphasis' : ''}">
+      <span class="ab-label">Conditions (IF — all must hold)<i>${emphasis === 'trigger' ? 'you chose to change the trigger — start here' : 'what has to be true for this to fire'}</i></span>
+      ${renderConditionPicker(p, a.rules.conditions, 'conditions')}
+    </div>
+
+    <div class="ab-field ${emphasis === 'trigger' ? 'ab-emphasis' : ''}">
+      <span class="ab-label">Exceptions (UNLESS — any suppresses firing)<i>the named cases where this rule should stay quiet</i></span>
+      ${renderConditionPicker(p, a.rules.exceptions, 'exceptions')}
+    </div>
+
+    <div class="ab-field ${emphasis === 'routine' || emphasis === 'reward' ? 'ab-emphasis' : ''}">
+      <span class="ab-label">Action (THEN — exactly one)<i>${emphasis === 'routine' ? 'you chose to change the routine — pick the replacement move' : emphasis === 'reward' ? 'you chose to change the reward — pick the substitute payoff' : 'the one reversible move it makes'}</i></span>
+      <div class="action-picker">${p.actions.map((act) => `
+        <button class="action-card ${a.rules.actionId === act.id ? 'active' : ''}" data-action-pick="${act.id}">
+          <b>${esc(act.label)}</b><span>${esc(act.description)}</span>
+        </button>`).join('')}</div>
+    </div>
+
+    <label class="ab-field">
+      <span class="ab-label">Notes (optional)<i>your own reminder — does not affect execution</i></span>
+      <textarea data-agent-notes rows="2" placeholder="e.g. try this for two weeks before judging it">${esc(a.learnNotes)}</textarea>
+    </label>
+
     <div class="ab-foot">
       <button class="ghost-link" data-action="open-coach">🗣 Ask the coach to poke holes</button>
-      <button class="primary-action ${ready ? '' : 'disabled'}" data-action="to-simulate">Boot the agent &amp; run a day <span>→</span></button>
+      <button class="primary-action ${ready ? '' : 'disabled'}" data-action="to-simulate">Save agent &amp; run a scenario <span>→</span></button>
     </div>
   </div>`
 }
 
-// ---------------------------------------------------------------- SIMULATE
+// ---------------------------------------------------------------- SIMULATE (Predict → Reveal → Compare → Repair → Replay)
 
 function renderSimulate(): string {
   const a = store.activeAgent() ?? draftAgent
+  const p = getPattern(workingPatternId)
   if (!a) return `<section class="screen"><p class="lede">Build an agent first.</p><button class="primary-action" data-action="to-choose">Start →</button></section>`
 
-  const kindMeta: Record<SimEvent['kind'], { tag: string; cls: string }> = {
-    scene: { tag: 'THE MOMENT', cls: 'ev-scene' },
-    trigger: { tag: 'TRIGGER', cls: 'ev-trigger' },
-    perceive: { tag: 'AGENT · PERCEIVE', cls: 'ev-perceive' },
-    decide: { tag: 'AGENT · DECIDE', cls: 'ev-decide' },
-    act: { tag: 'AGENT · ACT', cls: 'ev-act' },
-    outcome: { tag: 'WHAT YOU DID', cls: 'ev-outcome' },
-    debrief: { tag: 'DEBRIEF', cls: 'ev-debrief' },
+  if (!currentScenario) {
+    currentScenario = pickNextScenario(p, new Set(a.scenarioLog.map((r) => r.scenarioId)))
+  }
+  const scenario = currentScenario
+
+  const ruleSummary = `<div class="sim-agent-strip">
+    <span><i>IF</i> ${a.rules.conditions.length ? a.rules.conditions.map((c) => esc(describeCondition(c, p.flags))).join(' AND ') : '(none set)'}</span>
+    <span><i>UNLESS</i> ${a.rules.exceptions.length ? a.rules.exceptions.map((c) => esc(describeCondition(c, p.flags))).join(' OR ') : '(none)'}</span>
+    <span><i>THEN</i> ${esc(p.actions.find((x) => x.id === a.rules.actionId)?.label ?? '(none)')}</span>
+  </div>`
+
+  if (simPhase === 'predicting') {
+    return `<section class="screen sim-screen">
+      <div class="eyebrow">ACT III / PREDICT · ${scenario.kind.toUpperCase()} CASE</div>
+      <h2>Before you look —<br><em>will it fire?</em></h2>
+      ${ruleSummary}
+      <div class="scenario-card">
+        <div class="scenario-tag">${esc(scenario.title)}</div>
+        <p class="scenario-scene">${esc(scenario.sceneText)}</p>
+        <div class="scenario-facts">
+          <span>🕐 ${formatClock(scenario.clockMin)}</span>
+          ${Object.entries(scenario.flags).map(([k, v]) => `<span class="fact-flag ${v ? 'on' : 'off'}">${esc(p.flags.find((f) => f.id === k)?.label ?? k)}: ${v ? 'YES' : 'NO'}</span>`).join('')}
+        </div>
+      </div>
+      ${simBusy ? `<div class="evolving">Checking the engine…</div>` : ''}
+      <div class="predict-actions">
+        <button class="predict-btn fire ${simBusy ? 'disabled' : ''}" data-predict="true" ${simBusy ? 'disabled' : ''}>It fires <span>✓</span></button>
+        <button class="predict-btn quiet ${simBusy ? 'disabled' : ''}" data-predict="false" ${simBusy ? 'disabled' : ''}>It stays quiet <span>·</span></button>
+      </div>
+    </section>`
   }
 
-  const feed = simEvents.length
-    ? simEvents
-        .map(
-          (e) => `<div class="sim-ev ${kindMeta[e.kind].cls}"><div class="sim-ev-tag">${kindMeta[e.kind].tag}<i>${e.ts}</i></div><p>${esc(e.text)}</p></div>`,
-        )
-        .join('') + (simRunning ? `<div class="sim-ev ev-typing"><span></span><span></span><span></span></div>` : '')
-    : `<div class="sim-empty">
-        <p>Your agent v${a.version} is loaded.${keyStore.has() ? ' Mistral will role-play a slice of your day and run your rules against it, live.' : ' No key — a scripted day will run using your exact rule text.'}</p>
-      </div>`
+  // revealed
+  const trace = narratedResult!.trace
+  const result = scorePrediction(trace, userPrediction!)
+  const meta = predictionMeta(result)
 
   return `<section class="screen sim-screen">
-    <div class="eyebrow">ACT III / WATCH THE AGENT RUN${simResult ? ` · VERDICT: ${verdictLabel(simResult.verdict).toUpperCase()}` : ''}</div>
-    ${simResult ? `<div class="sim-source ${simResult.live ? 'live' : 'scripted'}">${simResult.live ? '● LIVE — MISTRAL RAN THIS' : '○ SCRIPTED FALLBACK' + (simResult.fallbackReason ? ' — ' + esc(simResult.fallbackReason) : ' — no key set')}</div>` : ''}
-    <h2>A day, simulated.<br><em>Your rules, live.</em></h2>
-    <div class="sim-agent-strip">
-      <span><i>SEES</i> ${esc(clip(a.perceive, 80))}</span>
-      <span><i>DECIDES</i> ${esc(clip(a.decide, 80))}</span>
-      <span><i>ACTS</i> ${esc(clip(a.act, 80))}</span>
+    <div class="eyebrow">ACT III / REVEAL · VERDICT: ${meta.label.toUpperCase()}</div>
+    ${narratedResult!.live ? '<div class="sim-source live">● NARRATED BY MISTRAL — verdict is deterministic either way</div>' : `<div class="sim-source scripted">○ SCRIPTED EXPLANATION${narratedResult!.fallbackReason ? ' — ' + esc(narratedResult!.fallbackReason) : ''}</div>`}
+    <h2>Here's exactly<br><em>why.</em></h2>
+    ${ruleSummary}
+
+    <div class="scenario-card">
+      <p class="scenario-scene">${esc(narratedResult!.sceneNarration)}</p>
     </div>
 
-    ${simTwist ? `<div class="sim-twist">TODAY'S TWIST · ${esc(simTwist)}</div>` : ''}
+    <div class="trace-table">
+      <div class="trace-row trace-head"><span>CHECK</span><span>RESULT</span></div>
+      ${trace.conditions.map((c) => `<div class="trace-row"><span>IF ${esc(describeCondition(c.condition, p.flags))}</span><span class="${c.met ? 'trace-true' : 'trace-false'}">${c.met ? 'TRUE' : 'FALSE'}</span></div>`).join('')}
+      ${trace.exceptions.map((e) => `<div class="trace-row"><span>UNLESS ${esc(describeCondition(e.condition, p.flags))}</span><span class="${e.met ? 'trace-true' : 'trace-false'}">${e.met ? 'TRUE (suppresses)' : 'FALSE'}</span></div>`).join('')}
+      <div class="trace-row trace-verdict"><span>FIRED?</span><span class="${trace.fired ? 'trace-true' : 'trace-false'}">${trace.fired ? 'YES' : 'NO'}</span></div>
+    </div>
 
-    <div class="sim-feed">${feed}</div>
+    <div class="compare-banner tone-${meta.tone}">
+      <b>You predicted ${userPrediction ? 'it fires' : 'it stays quiet'}.</b> ${meta.label === 'Correct' ? 'That matches the engine exactly.' : meta.label === 'Missed' ? 'The engine stayed quiet — your rule needs a broader condition or one fewer exception.' : 'The engine fired anyway — your rule needs a narrower condition or a new exception.'}
+    </div>
+
+    <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
+
+    ${evolving ? `<div class="evolving">Drafting a rule edit from this evidence…</div>` : ''}
 
     <div class="sim-controls">
-      ${
-        simRunning
-          ? `<button class="secondary-action" data-action="sim-stop">Stop <span>■</span></button>`
-          : simResult
-            ? `<button class="secondary-action" data-action="sim-twist">Harder day <span>🎲</span></button>
-               <button class="secondary-action" data-action="sim-rerun">Re-run <span>↻</span></button>
-               <button class="primary-action" data-action="sim-tune">Tune a rule &amp; re-run <span>✎</span></button>
-               <button class="primary-action" data-action="to-evolve">This agent is good — save it <span>→</span></button>`
-            : `<button class="primary-action big" data-action="sim-run">▶ Run the day</button>`
+      ${result === 'correct'
+        ? `<button class="secondary-action" data-action="sim-next">Try another scenario <span>→</span></button>
+           <button class="primary-action" data-action="to-evolve">Review evidence &amp; evolve <span>→</span></button>`
+        : `<button class="secondary-action" data-action="sim-next">Skip for now <span>→</span></button>
+           <button class="primary-action ${evolving ? 'disabled' : ''}" data-action="sim-repair">Repair this rule <span>✎</span></button>`
       }
+      <button class="ghost-link" data-action="sim-stress">🎲 Try a harder scenario</button>
     </div>
-    ${simRunCount === 0 && !simRunning ? '' : `<p class="sim-note">Watched runs done: ${simRunCount}. Each run is different. Tune rules between runs and watch the outcome change.</p>`}
+    ${a.scenarioLog.length ? `<p class="sim-note">${a.scenarioLog.length} scenario${a.scenarioLog.length === 1 ? '' : 's'} run so far.</p>` : ''}
   </section>`
 }
 
-function verdictLabel(v: SimResult['verdict']): string {
-  return v === 'fired-helped' ? 'agent won' : v === 'fired-annoyed' ? 'won but annoying' : 'loop won'
-}
-
-// ---------------------------------------------------------------- EVOLVE
+// ---------------------------------------------------------------- EVOLVE (evidence-gated)
 
 function renderEvolve(): string {
   const a = store.activeAgent()
   const p = getPattern(workingPatternId)
   if (!a) {
-    return `<section class="screen"><div class="eyebrow">MAKE IT SMARTER</div><h2>No saved agent yet.</h2><p class="lede">Run a simulation you're happy with, then save the agent — this is where it starts learning from your real days.</p><button class="primary-action" data-action="to-simulate">Back to the simulator →</button></section>`
+    return `<section class="screen"><div class="eyebrow">MAKE IT SMARTER</div><h2>No saved agent yet.</h2><p class="lede">Run a scenario in the simulator first — this is where the evidence accumulates.</p><button class="primary-action" data-action="to-simulate">Back to the simulator →</button></section>`
   }
-
-  const outcomes: CheckinOutcome[] = ['fired-helped', 'fired-annoyed', 'missed', 'not-needed']
 
   return `<section class="screen evolve-screen">
     <div class="eyebrow">ACT IV / THE RETURN LOOP</div>
-    <h2>Every real day makes<br>the agent <em>more yours.</em></h2>
-    <p class="lede">Tell it what actually happened with <b>${esc(p.title)}</b>. It proposes one surgical edit to one rule. Accept the ones that ring true — the version number is your progress.</p>
+    <h2>Every scenario run<br>makes the agent <em>more precise.</em></h2>
+    <p class="lede">Evolutions here are evidence-gated: every proposed edit is replayed against every scenario <b>${esc(p.title)}</b> has ever been tested on. If a fix breaks something that used to work, it's blocked before you can accept it.</p>
 
     <div class="agent-full">
       <div class="af-head"><b>${esc(p.title)}</b> <span class="ver">v${a.version}</span> ${a.history.length ? `<span class="af-evos">${a.history.length} evolution${a.history.length === 1 ? '' : 's'}</span>` : ''}</div>
       <div class="af-rules">
-        ${(['perceive', 'decide', 'act', 'learn'] as const)
-          .map((k) => `<div class="af-rule ${pendingEvolution?.field === k ? 'targeted' : ''}"><span>${k.toUpperCase()}</span><p>${esc(a[k] || '—')}</p></div>`)
-          .join('')}
+        <div class="af-rule"><span>IF</span><p>${a.rules.conditions.length ? a.rules.conditions.map((c) => esc(describeCondition(c, p.flags))).join(' AND ') : '—'}</p></div>
+        <div class="af-rule"><span>UNLESS</span><p>${a.rules.exceptions.length ? a.rules.exceptions.map((c) => esc(describeCondition(c, p.flags))).join(' OR ') : '—'}</p></div>
+        <div class="af-rule"><span>THEN</span><p>${esc(p.actions.find((x) => x.id === a.rules.actionId)?.label ?? '—')}</p></div>
       </div>
     </div>
 
-    ${
-      pendingEvolution
-        ? renderPendingEvolution()
-        : `<div class="checkin">
-            <div class="checkin-q">How did it go today?</div>
-            <div class="checkin-opts">${outcomes
-              .map((o) => {
-                const m = outcomeMeta(o)
-                return `<button class="checkin-opt tone-${m.tone}" data-checkin="${o}"><span>${m.glyph}</span>${m.label}</button>`
-              })
-              .join('')}</div>
-            <textarea id="checkin-note" class="checkin-note" rows="2" placeholder="One line on what happened (optional but the agent uses it)"></textarea>
-            ${evolving ? `<div class="evolving">Agent is rewriting a rule…</div>` : ''}
-          </div>`
-    }
+    ${pendingEvolution ? renderPendingEvolution(p) : `<div class="checkin"><p class="lede">No pending proposal. Run more scenarios in the simulator to generate evidence for the next edit.</p><button class="primary-action" data-action="to-simulate">Back to the simulator →</button></div>`}
 
-    ${a.history.length ? renderEvolutionLog(a) : ''}
+    ${a.history.length ? renderEvolutionLog(a, p) : ''}
   </section>`
 }
 
-function renderPendingEvolution(): string {
+function renderPendingEvolution(pattern: ReturnType<typeof getPattern>): string {
   const e = pendingEvolution!
-  return `<div class="evolution-proposal">
-    <div class="ep-head"><span class="eyebrow">PROPOSED EDIT · ${e.field.toUpperCase()} ${e.fromMistral ? '· MISTRAL' : '· SCRIPTED'}</span><p>${esc(e.note)}</p></div>
+  const blocking = e.regression.filter((r: RegressionCheck) => r.passedBefore && !r.passedAfter)
+  const blocked = blocking.length > 0
+  const describeRule = (rs: RuleSet) => {
+    if (e.field === 'conditions') return rs.conditions.length ? rs.conditions.map((c) => describeCondition(c, pattern.flags)).join(' AND ') : '(none)'
+    if (e.field === 'exceptions') return rs.exceptions.length ? rs.exceptions.map((c) => describeCondition(c, pattern.flags)).join(' OR ') : '(none)'
+    return pattern.actions.find((a) => a.id === rs.actionId)?.label ?? '(none)'
+  }
+  return `<div class="evolution-proposal ${blocked ? 'blocked' : ''}">
+    <div class="ep-head"><span class="eyebrow">PROPOSED EDIT · ${e.field.toUpperCase()} ${e.fromMistral ? '· MISTRAL' : '· SCRIPTED'}</span><p>${esc(e.rationale)}</p></div>
     <div class="ep-diff">
-      <div class="ep-before"><span>BEFORE</span><p>${esc(e.ruleBefore || '—')}</p></div>
+      <div class="ep-before"><span>BEFORE</span><p>${esc(describeRule(e.ruleBefore))}</p></div>
       <div class="ep-arrow">→</div>
-      <div class="ep-after"><span>AFTER</span><p>${esc(e.ruleAfter)}</p></div>
+      <div class="ep-after"><span>AFTER</span><p>${esc(describeRule(e.ruleAfter))}</p></div>
+    </div>
+    <div class="regression-table">
+      <div class="regression-head">REGRESSION CHECK · ${e.regression.length} PRIOR SCENARIO${e.regression.length === 1 ? '' : 'S'}</div>
+      ${e.regression.map((r: RegressionCheck) => {
+        const s = pattern.scenarios.find((sc) => sc.id === r.scenarioId)
+        const status = !r.passedBefore ? 'n/a — was not previously correct' : r.passedAfter ? 'still correct' : 'REGRESSION — was correct, now wrong'
+        return `<div class="regression-row ${r.passedBefore && !r.passedAfter ? 'regression-bad' : 'regression-ok'}"><span>${esc(s?.title ?? r.scenarioId)}</span><span>${status}</span></div>`
+      }).join('')}
     </div>
     <div class="ep-actions">
       <button class="secondary-action" data-action="evo-reject">Keep current rule</button>
-      <button class="primary-action" data-action="evo-accept">Apply · agent → v${(store.activeAgent()?.version ?? 1) + 1} <span>→</span></button>
+      <button class="primary-action ${blocked ? 'disabled' : ''}" data-action="evo-accept">${blocked ? 'Blocked — revise the edit' : `Apply · agent → v${(store.activeAgent()?.version ?? 1) + 1}`} <span>→</span></button>
     </div>
   </div>`
 }
 
-function renderEvolutionLog(a: Agent): string {
+function renderEvolutionLog(a: Agent, pattern: ReturnType<typeof getPattern>): string {
   return `<div class="evo-log">
     <div class="eyebrow">EVOLUTION LOG</div>
     ${a.history
       .slice()
       .reverse()
       .map((h, i) => {
-        const m = outcomeMeta(h.outcome)
+        const m = predictionMeta(h.predictionResult)
         const ver = a.version - i
+        const describeRule = (rs: RuleSet) => {
+          if (h.field === 'conditions') return rs.conditions.map((c) => describeCondition(c, pattern.flags)).join(' AND ') || '(none)'
+          if (h.field === 'exceptions') return rs.exceptions.map((c) => describeCondition(c, pattern.flags)).join(' OR ') || '(none)'
+          return pattern.actions.find((a2) => a2.id === rs.actionId)?.label ?? '(none)'
+        }
         return `<div class="evo-entry">
           <div class="evo-entry-head"><span class="ver">v${ver - 1}→v${ver}</span><span class="tone-${m.tone}">${m.label}</span><i>${new Date(h.at).toLocaleDateString()}</i></div>
-          <p class="evo-why">${esc(h.note)}</p>
-          <p class="evo-change"><b>${h.field}:</b> ${esc(clip(h.ruleBefore, 70))} <b>→</b> ${esc(clip(h.ruleAfter, 90))}</p>
+          <p class="evo-why">${esc(h.rationale)}</p>
+          <p class="evo-change"><b>${h.field}:</b> ${esc(clip(describeRule(h.ruleBefore), 70))} <b>→</b> ${esc(clip(describeRule(h.ruleAfter), 90))}</p>
         </div>`
       })
       .join('')}
@@ -483,14 +570,13 @@ function renderSettings(): string {
   const masked = k ? k.slice(0, 6) + '…' + k.slice(-4) : ''
   const currentModel = keyStore.model()
   const options = fetchedModels?.length ? fetchedModels.map((m) => m.name) : []
-  // Never present a stale saved model as confirmed. Refresh is the source of truth.
   const allOptions = fetchedModels ? (options.includes(currentModel) ? options : [currentModel, ...options]) : []
 
   return `<div class="modal-backdrop">
     <div class="modal">
       <div class="modal-head"><h3>Mistral API key</h3><button data-action="close-settings">✕</button></div>
-      <p class="modal-p">The live agent — the simulated day, the Socratic coach, and the rule-rewrites — run on <b>your own</b> Mistral key. It is stored only in this browser's localStorage and sent straight to Mistral, never to us. The whole tool still works without one; you just get scripted versions.</p>
-      <p class="modal-p"><a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">Get a Mistral key →</a> — Studio is available in Free mode by default.</p>
+      <p class="modal-p">Mistral only NARRATES the deterministic verdict and proposes candidate edits — it never decides whether a rule fires; the engine does that with plain code, with or without a key. Your key is stored only in this browser's localStorage and sent straight to Mistral.</p>
+      <p class="modal-p"><a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">Get a Mistral key →</a></p>
       <label class="modal-field"><span>API key</span>
         <input type="password" data-settings-key placeholder="${masked || 'Mistral key…'}" autocomplete="off" />
       </label>
@@ -529,12 +615,11 @@ function render() {
 
   app.innerHTML =
     renderHeader() +
+    renderMigrationBanner() +
     `<div class="app-layout">${renderRail()}<main>${body}</main></div>` +
     renderCoachPanel() +
     (toast ? `<div class="toast">${esc(toast)}</div>` : '')
 
-  // Only steal focus into the coach input right after it first appears —
-  // never on every re-render, or typing there would also get interrupted.
   const ci = app.querySelector<HTMLInputElement>('[data-coach-text]')
   if (ci && !coachBusy && !lastFocusedCoachInput) {
     ci.focus()
@@ -546,9 +631,6 @@ function render() {
   renderModal()
 }
 
-// The settings modal is rendered into its own root, independently of app
-// re-renders, and only rebuilt when it actually needs to open/close/re-key —
-// so a paste into the key field is never interrupted by an unrelated render().
 let modalRendered = false
 
 function renderModal() {
@@ -559,19 +641,13 @@ function renderModal() {
     }
     return
   }
-  if (modalRendered) return // already showing — leave the live input alone
+  if (modalRendered) return
   modalRoot.innerHTML = renderSettings()
   modalRendered = true
 }
 
 // ---------------------------------------------------------------- modal events
 
-/**
- * Ask Google what models this key can actually reach and select a sensible
- * default from that real list — this is what prevents a hardcoded, possibly
- * region/tier-unavailable model name from
- * sitting selected indefinitely.
- */
 async function refreshModelsForKey(opts: { silent: boolean }) {
   if (!keyStore.has()) {
     if (!opts.silent) {
@@ -589,16 +665,9 @@ async function refreshModelsForKey(opts: { silent: boolean }) {
     if (models.length) {
       const currentlySelected = keyStore.model()
       const currentIsAvailable = models.some((m) => m.name === currentlySelected)
-      // Never override a model the user explicitly selected (or that's already
-      // saved) if it's actually available to this key — only step in when the
-      // current selection is confirmed dead, so "I picked 2.5" never silently
-      // becomes "using 3.6" just because 3.6 is our general preference order.
       if (!currentIsAvailable) {
-        // Prefer a stable, cost-effective "flash" model as the suggested default —
-        // this is what a long-lived, non-preview base model looks like in Google's
-        // naming: no "preview"/"exp" in the name, "flash" over "pro" for cost.
         const preferred =
-          models.find((m) => /flash/i.test(m.name) && !/preview|exp|thinking/i.test(m.name)) ??
+          models.find((m) => /small/i.test(m.name) && !/preview|exp/i.test(m.name)) ??
           models.find((m) => !/preview|exp/i.test(m.name)) ??
           models[0]
         if (preferred) {
@@ -606,10 +675,10 @@ async function refreshModelsForKey(opts: { silent: boolean }) {
           showToast(`"${currentlySelected}" isn't available to this key — switched to ${preferred.name}.`)
         }
       } else if (opts.silent) {
-        showToast(`Confirmed with Google — "${currentlySelected}" is available to this key.`)
+        showToast(`Confirmed with Mistral — "${currentlySelected}" is available to this key.`)
       }
     } else {
-      modelsError = 'Google returned no usable models for this key.'
+      modelsError = 'Mistral returned no usable models for this key.'
     }
   } catch (e) {
     modelsError = e instanceof Error ? e.message : String(e)
@@ -625,8 +694,6 @@ function syncModelFromModal() {
   if (model?.value) keyStore.setModel(model.value)
 }
 
-// Isolated from app's click handler and app's render() cycle entirely, so
-// nothing outside the modal can ever wipe the key input while you're pasting.
 modalRoot.addEventListener('click', async (event) => {
   const t = event.target as HTMLElement
   const action = t.closest<HTMLElement>('[data-action]')?.dataset.action
@@ -641,18 +708,14 @@ modalRoot.addEventListener('click', async (event) => {
     if (model) keyStore.setModel(model.value)
     settingsOpen = false
     renderModal()
-    showToast(keyStore.has() ? 'Mistral key saved — live agent enabled.' : 'Model saved.')
-    // A freshly-entered key almost certainly hasn't had its model list checked
-    // yet — this is exactly how a stale/unavailable hardcoded model name (like
-    // the 404 case) gets picked. Confirm against Google right away instead of
-    // silently leaving a guessed model selected until something fails.
+    showToast(keyStore.has() ? 'Mistral key saved.' : 'Model saved.')
     if (newKeyTyped) await refreshModelsForKey({ silent: true })
     return
   }
   if (action === 'clear-key') {
     keyStore.clear()
     fetchedModels = null
-    modalRoot.innerHTML = renderSettings() // re-key: safe, this is a deliberate click, not a paste-in-progress
+    modalRoot.innerHTML = renderSettings()
     showToast('Key removed. Scripted mode.')
     return
   }
@@ -676,7 +739,6 @@ modalRoot.addEventListener('click', async (event) => {
   }
 })
 
-// Backdrop click closes the modal; clicking inside the modal box must not.
 modalRoot.addEventListener('mousedown', (event) => {
   if (event.target === modalRoot.firstElementChild) {
     settingsOpen = false
@@ -695,21 +757,32 @@ app.addEventListener('click', async (event) => {
   const diag = t.closest<HTMLButtonElement>('[data-diagnosis]')?.dataset.diagnosis
   const lessonTab = t.closest<HTMLButtonElement>('[data-lesson]')?.dataset.lesson
   const choice = t.closest<HTMLButtonElement>('[data-choice]')?.dataset.choice
-  const checkin = t.closest<HTMLButtonElement>('[data-checkin]')?.dataset.checkin
+  const condToggle = t.closest<HTMLButtonElement>('[data-cond-toggle]')
+  const actionPick = t.closest<HTMLButtonElement>('[data-action-pick]')?.dataset.actionPick
+  const predict = t.closest<HTMLButtonElement>('[data-predict]')?.dataset.predict
 
   if (t.closest('[data-stop]') && !action) return
 
   // ---- navigation
   if (action === 'home') { go('home'); return }
   if (action === 'to-choose') { go('choose'); return }
-  if (action === 'to-evolve') { go('evolve'); return }
+  if (action === 'to-evolve') {
+    pendingEvolution = null
+    go('evolve')
+    return
+  }
   if (action === 'to-simulate') {
     if (draftAgent && !store.getAgent(workingPatternId)) store.saveAgent(draftAgent)
-    simEvents = []; simResult = null; simTwist = ''
-    go('simulate'); return
+    currentScenario = null
+    narratedResult = null
+    simPhase = 'predicting'
+    userPrediction = null
+    go('simulate')
+    return
   }
+  if (action === 'dismiss-migration') { migrationBannerDismissed = true; store.markMigrationNoticeSeen(); render(); return }
 
-  // ---- settings (open only here; all in-modal actions are handled by modalRoot's own listener)
+  // ---- settings
   if (action === 'settings') { settingsOpen = true; render(); return }
 
   // ---- choose
@@ -743,6 +816,25 @@ app.addEventListener('click', async (event) => {
     render(); return
   }
 
+  // ---- structured rule editor
+  if (condToggle && draftAgent) {
+    const listName = condToggle.dataset.condToggle as 'conditions' | 'exceptions'
+    const flagId = condToggle.dataset.condFlag!
+    const cond: Condition = { type: 'flag', flag: flagId, equals: true }
+    const key = conditionKey(cond)
+    const list = draftAgent.rules[listName]
+    const idx = list.findIndex((c) => conditionKey(c) === key)
+    if (idx >= 0) list.splice(idx, 1)
+    else list.push(cond)
+    render()
+    return
+  }
+  if (actionPick && draftAgent) {
+    draftAgent.rules.actionId = actionPick
+    render()
+    return
+  }
+
   // ---- coach
   if (action === 'open-coach') {
     if (!draftAgent) draftAgent = seedAgent()
@@ -759,38 +851,39 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'close-coach') { coachLog = []; coachBusy = false; render(); return }
 
-  // ---- simulate
-  if (action === 'sim-run' || action === 'sim-rerun') {
-    await doSimRun(action === 'sim-rerun')
+  // ---- simulate: predict
+  if (predict !== undefined) {
+    userPrediction = predict === 'true'
+    await doReveal()
     return
   }
-  if (action === 'sim-twist') {
-    simTwist = await surpriseTwist(getPattern(workingPatternId))
+  if (action === 'sim-next') {
+    currentScenario = null
+    narratedResult = null
+    simPhase = 'predicting'
+    userPrediction = null
     render()
-    await doSimRun(false)
     return
   }
-  if (action === 'sim-stop') { abort?.abort(); simRunning = false; render(); return }
-  if (action === 'sim-tune') {
-    // jump back to the builder with the live agent loaded
+  if (action === 'sim-stress') {
+    await doStressScenario()
+    return
+  }
+  if (action === 'sim-repair') {
     draftAgent = store.activeAgent() ?? draftAgent
     go('build')
-    setTimeout(() => {
-      app.querySelector('.agent-builder')?.scrollIntoView({ behavior: 'smooth' })
-    }, 60)
+    setTimeout(() => app.querySelector('.agent-builder')?.scrollIntoView({ behavior: 'smooth' }), 60)
     return
   }
 
   // ---- evolve
-  if (checkin) {
-    const note = app.querySelector<HTMLTextAreaElement>('#checkin-note')?.value ?? ''
-    await doCheckin(checkin as CheckinOutcome, note)
-    return
-  }
   if (action === 'evo-accept' && pendingEvolution) {
+    const blocking = pendingEvolution.regression.some((r: RegressionCheck) => r.passedBefore && !r.passedAfter)
+    if (blocking) { showToast('Blocked — this edit regresses a previously-correct scenario.'); return }
     const updated = store.evolveAgent(pendingEvolution)
     pendingEvolution = null
-    showToast(updated ? `Agent evolved to v${updated.version}.` : 'Saved.')
+    showToast(updated ? `Agent evolved to v${updated.version}.` : 'Could not apply — try again.')
+    render()
     return
   }
   if (action === 'evo-reject') { pendingEvolution = null; render(); return }
@@ -818,63 +911,63 @@ app.addEventListener('submit', async (event) => {
   render()
 })
 
-// keep draft agent fields in sync as the user types
+// keep draft agent notes in sync as the user types
 app.addEventListener('input', (event) => {
   const el = event.target as HTMLElement
-  const field = (el as HTMLTextAreaElement).dataset?.agentField
-  if (field && draftAgent) {
-    ;(draftAgent as unknown as Record<string, string>)[field] = (el as HTMLTextAreaElement).value
+  if ((el as HTMLElement).hasAttribute?.('data-agent-notes') && draftAgent) {
+    draftAgent.learnNotes = (el as HTMLTextAreaElement).value
   }
 })
 
-async function doSimRun(isRerun: boolean) {
+async function doReveal() {
   const agent = store.activeAgent() ?? draftAgent
-  if (!agent) return
-  const priorDebrief = simResult?.debrief ?? ''
-  simEvents = []
-  simResult = null
-  simRunning = true
+  if (!agent || !currentScenario) return
+  simBusy = true
   abort = new AbortController()
   render()
   try {
-    const onEvent = (e: SimEvent) => {
-      simEvents = [...simEvents, e]
+    narratedResult = await runScenario(agent, getPattern(workingPatternId), currentScenario, abort.signal)
+    simPhase = 'revealed'
+    const trace = narratedResult.trace
+    const result: PredictionResult = scorePrediction(trace, userPrediction!)
+    const updated = store.recordScenarioRun({
+      at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
+      userPredictedFire: userPrediction!, trace, predictionResult: result,
+    })
+    if (narratedResult.fallbackReason) showToast(`Mistral unavailable: ${narratedResult.fallbackReason}`)
+    if (result !== 'correct' && updated) {
+      evolving = true
       render()
-    }
-    const result = isRerun
-      ? await rerunDay(agent, getPattern(workingPatternId), priorDebrief, onEvent, abort.signal)
-      : await runDay(agent, getPattern(workingPatternId), simTwist, onEvent, abort.signal)
-    simResult = result
-    simRunCount++
-    store.addXp(20)
-    if (result.fallbackReason) {
-      showToast(`Mistral unavailable, this run was scripted: ${result.fallbackReason}`)
+      pendingEvolution = await proposeEvolution(updated, getPattern(workingPatternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
+      evolving = false
     }
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') {
-      showToast('Simulation error: ' + (e as Error).message)
-    }
+    if ((e as Error).name !== 'AbortError') showToast('Error: ' + (e as Error).message)
   } finally {
-    simRunning = false
+    simBusy = false
     abort = null
     render()
   }
 }
 
-async function doCheckin(outcome: CheckinOutcome, note: string) {
-  const agent = store.activeAgent()
-  if (!agent) return
-  const streak = store.addCheckin(outcome, note)
-  evolving = true
+async function doStressScenario() {
+  const p = getPattern(workingPatternId)
+  simBusy = true
+  abort = new AbortController()
   render()
   try {
-    pendingEvolution = await proposeEvolution(agent, getPattern(workingPatternId), outcome, note)
+    const { scenario, live, fallbackReason } = await proposeStressScenario(p, abort.signal)
+    currentScenario = scenario
+    narratedResult = null
+    simPhase = 'predicting'
+    userPrediction = null
+    if (!live && fallbackReason) showToast(`Mistral unavailable, using an authored scenario: ${fallbackReason}`)
   } catch (e) {
-    showToast('Could not draft an edit: ' + (e as Error).message)
+    if ((e as Error).name !== 'AbortError') showToast('Error: ' + (e as Error).message)
   } finally {
-    evolving = false
+    simBusy = false
+    abort = null
     render()
-    if (streak > 1) showToast(`🔥 ${streak}-day streak.`)
   }
 }
 
@@ -889,7 +982,7 @@ function maybeUnlock() {
 const _origEvolve = store.evolveAgent.bind(store)
 store.evolveAgent = ((entry) => {
   const r = _origEvolve(entry)
-  maybeUnlock()
+  if (r) maybeUnlock()
   return r
 }) as typeof store.evolveAgent
 

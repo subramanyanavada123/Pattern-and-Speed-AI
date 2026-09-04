@@ -1,6 +1,7 @@
-import type { SaveState, Agent, Checkin, PartId, CheckinOutcome, EvolutionEntry } from './types'
+import type { SaveState, Agent, PartId, EvolutionEntry, RuleSet, ScenarioRun } from './types'
 
-const SAVE_KEY = 'pattern-machine.save.v2'
+const SAVE_KEY = 'pattern-machine.save.v3'
+const OLD_SAVE_KEY = 'pattern-machine.save.v2'
 const MISTRAL_KEY = 'pattern-machine.mistral-key'
 const MODEL_KEY = 'pattern-machine.mistral-model'
 // Keep this as a migration fallback only. A newly entered key is validated
@@ -12,12 +13,12 @@ function blankSave(): SaveState {
   return {
     agents: {},
     activeAgentId: '',
-    checkins: [],
     xp: 0,
     completedLessons: [],
     unlockedPatterns: ['scroll', 'gym', 'cart'],
     lastVisit: 0,
     streak: 0,
+    sawMigrationNotice: false,
   }
 }
 
@@ -39,7 +40,46 @@ function write(key: string, value: unknown) {
   }
 }
 
-let state: SaveState = normalise(read<SaveState>(SAVE_KEY, blankSave()))
+/**
+ * v2 agents stored freeform prose (perceive/decide/act/learn strings) — there
+ * is no faithful way to turn prose into structured conditions, so agents are
+ * NOT carried forward. What IS safely portable (lesson completion, XP,
+ * unlocked patterns, streak) is preserved. `migratedFromV2` flags this run so
+ * the UI can show a one-time honest notice instead of silently losing state.
+ */
+function migrateFromV2(): { save: SaveState; migratedFromV2: boolean } {
+  const fresh = blankSave()
+  let oldRaw: string | null = null
+  try {
+    oldRaw = localStorage.getItem(OLD_SAVE_KEY)
+  } catch {
+    /* noop */
+  }
+  if (!oldRaw) return { save: fresh, migratedFromV2: false }
+
+  try {
+    const old = JSON.parse(oldRaw) as Partial<{
+      xp: number
+      completedLessons: PartId[]
+      unlockedPatterns: string[]
+      streak: number
+      lastVisit: number
+    }>
+    const migrated: SaveState = {
+      ...fresh,
+      xp: typeof old.xp === 'number' ? old.xp : fresh.xp,
+      completedLessons: Array.isArray(old.completedLessons) ? old.completedLessons : fresh.completedLessons,
+      unlockedPatterns: Array.isArray(old.unlockedPatterns) && old.unlockedPatterns.length ? old.unlockedPatterns : fresh.unlockedPatterns,
+      streak: typeof old.streak === 'number' ? old.streak : fresh.streak,
+      lastVisit: typeof old.lastVisit === 'number' ? old.lastVisit : fresh.lastVisit,
+      sawMigrationNotice: false,
+    }
+    write(SAVE_KEY, migrated)
+    return { save: migrated, migratedFromV2: true }
+  } catch {
+    return { save: fresh, migratedFromV2: false }
+  }
+}
 
 function normalise(s: SaveState): SaveState {
   const base = blankSave()
@@ -47,11 +87,16 @@ function normalise(s: SaveState): SaveState {
     ...base,
     ...s,
     agents: s.agents ?? {},
-    checkins: Array.isArray(s.checkins) ? s.checkins : [],
     completedLessons: Array.isArray(s.completedLessons) ? s.completedLessons : [],
     unlockedPatterns: Array.isArray(s.unlockedPatterns) && s.unlockedPatterns.length ? s.unlockedPatterns : base.unlockedPatterns,
   }
 }
+
+const existingV3 = read<SaveState | null>(SAVE_KEY, null)
+const migration = existingV3 ? { save: existingV3, migratedFromV2: false } : migrateFromV2()
+let state: SaveState = normalise(migration.save)
+/** True only for this page load, only if a v2 save existed and no v3 save did yet — surfaced once by the UI. */
+export const justMigratedFromV2 = migration.migratedFromV2
 
 // `state` is loaded into memory once per page/tab. If another tab (or a stale
 // module instance left over from a hot-reload) writes to localStorage in the
@@ -76,25 +121,15 @@ function reconcile(mine: SaveState, disk: SaveState): SaveState {
       agents[id] = agent
     }
   }
-  const checkinKey = (c: Checkin) => `${c.at}:${c.outcome}`
-  const seen = new Set<string>()
-  const checkins = [...disk.checkins, ...mine.checkins]
-    .sort((a, b) => a.at - b.at)
-    .filter((c) => {
-      const k = checkinKey(c)
-      if (seen.has(k)) return false
-      seen.add(k)
-      return true
-    })
   return {
     agents,
     activeAgentId: mine.activeAgentId || disk.activeAgentId,
-    checkins,
     xp: Math.max(mine.xp, disk.xp),
     completedLessons: Array.from(new Set([...disk.completedLessons, ...mine.completedLessons])),
     unlockedPatterns: Array.from(new Set([...disk.unlockedPatterns, ...mine.unlockedPatterns])),
     lastVisit: Math.max(mine.lastVisit, disk.lastVisit),
     streak: Math.max(mine.streak, disk.streak),
+    sawMigrationNotice: mine.sawMigrationNotice || disk.sawMigrationNotice,
   }
 }
 
@@ -131,6 +166,11 @@ export const store = {
 
   reset() {
     state = blankSave()
+    persist()
+  },
+
+  markMigrationNoticeSeen() {
+    state.sawMigrationNotice = true
     persist()
   },
 
@@ -177,29 +217,36 @@ export const store = {
     return state.unlockedPatterns.includes(id)
   },
 
-  /** Record a real-world check-in, update streak, return the streak. */
-  addCheckin(outcome: CheckinOutcome, note: string): number {
-    const now = Date.now()
-    const last = state.checkins[state.checkins.length - 1]
-    const checkin: Checkin = { at: now, outcome, note }
-    state.checkins.push(checkin)
-
-    if (!last) {
-      state.streak = 1
-    } else {
-      const gap = now - last.at
-      if (gap <= 2 * DAY) state.streak += 1
-      else state.streak = 1
-    }
+  /** Record one predict/reveal run against the active agent — the objective evidence corpus. */
+  recordScenarioRun(run: ScenarioRun): Agent | null {
+    const agent = this.activeAgent()
+    if (!agent) return null
+    agent.scenarioLog.push(run)
+    agent.updatedAt = Date.now()
+    state.agents[agent.patternId] = agent
+    state.xp += run.predictionResult === 'correct' ? 15 : 5
     persist()
-    return state.streak
+    return agent
   },
 
-  /** Apply an evolution: rewrite one field of the active agent, bump version, log it. */
+  /**
+   * Apply an accepted, regression-checked evolution: rewrite ONE structured
+   * field of the active agent's rules, bump version, log it. Refuses to apply
+   * an entry carrying an unacknowledged regression (passedBefore && !passedAfter)
+   * as a defensive last line — the UI is expected to gate this too.
+   */
   evolveAgent(entry: EvolutionEntry): Agent | null {
     const agent = this.activeAgent()
     if (!agent) return null
-    ;(agent as unknown as Record<string, string>)[entry.field] = entry.ruleAfter
+    const hasBlockingRegression = entry.regression.some((r) => r.passedBefore && !r.passedAfter)
+    if (hasBlockingRegression) return null
+
+    const rules: RuleSet = { ...agent.rules }
+    if (entry.field === 'conditions') rules.conditions = entry.ruleAfter.conditions
+    else if (entry.field === 'exceptions') rules.exceptions = entry.ruleAfter.exceptions
+    else rules.actionId = entry.ruleAfter.actionId
+
+    agent.rules = rules
     agent.version += 1
     agent.history.push(entry)
     agent.updatedAt = Date.now()
@@ -214,22 +261,17 @@ export const store = {
     if (!state.lastVisit) return 0
     return Math.floor((Date.now() - state.lastVisit) / DAY)
   },
-
-  checkinsLast(n: number): Checkin[] {
-    return state.checkins.slice(-n)
-  },
 }
 
 export function newAgent(patternId: string): Agent {
   return {
     patternId,
-    perceive: '',
-    decide: '',
-    act: '',
-    learn: 'When an outcome comes in, adjust one part of me: narrow the trigger if I annoyed you, gentle the action if I over-fired, add a sense if I missed.',
     diagnosis: '',
+    rules: { conditions: [], exceptions: [], actionId: '' },
+    learnNotes: '',
     version: 1,
     history: [],
+    scenarioLog: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   }
