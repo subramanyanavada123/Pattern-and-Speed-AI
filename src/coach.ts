@@ -1,5 +1,5 @@
 import type { Agent, Pattern } from './types'
-import { generate, MistralError } from './mistral'
+import { generate, MistralError, searchWeb, type Citation } from './mistral'
 import { keyStore } from './store'
 import { describeCondition } from './engine'
 
@@ -47,16 +47,48 @@ They chose to change the: ${agent.diagnosis || '(not chosen)'}`
   }
 }
 
+/**
+ * True for questions the coach should ground with a real web search instead
+ * of reasoning purely from the prompt — "is this real", "is there research",
+ * "what does X actually mean" style asks. Client-side heuristic because
+ * chat/completions (what the plain coach conversation uses) doesn't support
+ * tool use at all — only the separate Conversations API does — so this
+ * decides up front which endpoint to call, rather than the model deciding
+ * mid-call.
+ */
+function needsWebSearch(userText: string): boolean {
+  return /\b(research|study|studies|evidence|proof|source|cite|citation|real(ly)?|actual(ly)?|is (this|that) (true|legit)|does this work|works\??$)\b/i.test(userText)
+}
+
 export async function reply(
   agent: Agent,
   pattern: Pattern,
   history: { role: 'coach' | 'you'; text: string }[],
   userText: string,
   signal?: AbortSignal,
-): Promise<{ text: string; live: boolean }> {
+): Promise<{ text: string; live: boolean; citations?: Citation[] }> {
   if (!keyStore.has()) {
     return { text: 'Add a Mistral key in Settings to go back and forth with the coach. For now: check whether your conditions list is specific enough to avoid over-firing.', live: false }
   }
+
+  if (needsWebSearch(userText)) {
+    try {
+      const grounded = await searchWeb(
+        `In the context of implementation-intention habit research and the pattern "${pattern.title}" (${pattern.trigger} -> ${pattern.routine}), answer briefly and concretely: ${userText}`,
+        { maxTokens: 250, signal },
+      )
+      if (grounded.text) {
+        return { text: grounded.text, live: true, citations: grounded.citations }
+      }
+      // Empty grounded answer — fall through to the normal reasoning path below
+      // rather than showing nothing.
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e
+      // Web search failing (wrong model, beta endpoint hiccup, etc.) shouldn't
+      // kill the whole coach reply — fall back to the normal ungrounded path.
+    }
+  }
+
   const convo = history.map((h) => `${h.role === 'coach' ? 'COACH' : 'USER'}: ${h.text}`).join('\n')
   const prompt = `Pattern: ${pattern.title}
 Agent now:

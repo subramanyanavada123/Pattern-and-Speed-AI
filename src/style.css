@@ -305,6 +305,9 @@ h1, h2, h3, p { margin: 0; }
 .coach-msg p { font-size: 13px; line-height: 1.55; margin-top: 4px; color: #d8d5cc; }
 .coach-msg.you p { color: var(--paper); }
 .coach-msg.coach p { color: #cfccc4; }
+.coach-citations { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.coach-citations a { font: 10px 'DM Mono'; color: var(--blue); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coach-citations a:hover { text-decoration: underline; }
 .dots { display: flex; gap: 4px; }
 .dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); animation: blink 1.2s infinite; }
 .dots span:nth-child(2) { animation-delay: .2s; }

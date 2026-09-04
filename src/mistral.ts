@@ -55,7 +55,11 @@ function responseText(json: any): string {
 async function detailOf(res: Response): Promise<string> {
   try {
     const json = await res.json()
-    return json?.message || json?.error?.message || json?.error || ''
+    // Different Mistral endpoints use different error envelopes — chat completions
+    // uses {message}, the Conversations API uses {detail} (confirmed live: a bad
+    // key on /v1/conversations returns {"detail":"Invalid API Key"}), some return
+    // {error:{message}} or a bare {error} string.
+    return json?.message || json?.detail || json?.error?.message || json?.error || ''
   } catch {
     return ''
   }
@@ -178,6 +182,82 @@ export async function listModels(): Promise<ModelInfo[]> {
 export async function testKey(): Promise<{ ok: true } | { ok: false; error: string }> {
   try { await generate('Reply with the single word: ready', { maxTokens: 10, temperature: 0 }); return { ok: true } }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+}
+
+// ---- Web search (Conversations API — a separate, beta endpoint from chat completions) ----
+
+export type Citation = { title: string; url: string }
+export type SearchResult = { text: string; citations: Citation[] }
+
+/**
+ * One-shot, grounded query via Mistral's built-in web_search tool. This is a
+ * DIFFERENT endpoint (/v1/conversations, not /v1/chat/completions) with a
+ * different request/response envelope and even a different error shape
+ * (confirmed live: {"detail": "..."} on auth failure, not {"message": ...}).
+ * Only ever used to fetch real citations/context to hand to the user — never
+ * to decide anything the deterministic engine is responsible for.
+ */
+export async function searchWeb(query: string, opts: { maxTokens?: number; signal?: AbortSignal } = {}): Promise<SearchResult> {
+  const key = keyStore.get()
+  if (!key) throw new MistralError('No Mistral API key set', 0)
+  const model = keyStore.model()
+
+  let res: Response
+  try {
+    res = await fetch(`${ENDPOINT}/conversations`, {
+      method: 'POST',
+      headers: headers(key),
+      body: JSON.stringify({
+        model,
+        inputs: query,
+        tools: [{ type: 'web_search' }],
+        completion_args: { max_tokens: opts.maxTokens ?? 500 },
+      }),
+      signal: opts.signal,
+    })
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    throw new MistralError('Network error reaching Mistral')
+  }
+
+  if (!res.ok) {
+    const detail = await detailOf(res)
+    if (res.status === 401) throw new MistralError('That Mistral API key was rejected. Check it in Settings.', 401)
+    if (res.status === 429) throw new MistralError(quotaMessage(model, detail, res.headers.get('retry-after')), 429, retrySeconds(detail, res.headers.get('retry-after')))
+    if (res.status === 404) throw new MistralError(`Mistral model "${model}" doesn't support web search, or the endpoint isn't available to this key.`, 404)
+    if (res.status === 400 && /web_search|tool/i.test(detail)) {
+      throw new MistralError(`This model doesn't support web search. Try a different model in Settings.`, 400)
+    }
+    throw new MistralError(detail || `Mistral returned ${res.status}`, res.status)
+  }
+
+  const json = await res.json()
+  // The Conversations API response shape is still evolving (beta) — parse
+  // defensively across the plausible shapes rather than assuming one exact
+  // path, and treat "found nothing readable" as empty rather than throwing,
+  // since a citation-less answer is still a usable answer.
+  const outputs: unknown[] = Array.isArray(json?.outputs) ? json.outputs : []
+  let text = ''
+  const citations: Citation[] = []
+
+  for (const output of outputs) {
+    const o = output as Record<string, unknown>
+    const content = o?.content
+    if (typeof content === 'string') {
+      text += content
+    } else if (Array.isArray(content)) {
+      for (const chunk of content) {
+        const c = chunk as Record<string, unknown>
+        if (typeof c === 'string') { text += c; continue }
+        if (typeof c?.text === 'string') text += c.text
+        if (c?.type === 'tool_reference' && typeof c?.url === 'string') {
+          citations.push({ title: typeof c.title === 'string' ? c.title : c.url, url: c.url })
+        }
+      }
+    }
+  }
+
+  return { text: text.trim(), citations }
 }
 
 export function extractJson<T>(text: string): T | null {

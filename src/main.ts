@@ -5,7 +5,7 @@ import { store, newAgent, keyStore, onExternalSave, justMigratedFromV2 } from '.
 import { critique, reply } from './coach'
 import { runScenario, proposeStressScenario, pickNextScenario, type NarratedResult } from './simulator'
 import { proposeEvolution, predictionMeta } from './evolve'
-import { testKey, listModels, type ModelInfo } from './mistral'
+import { testKey, listModels, type ModelInfo, type Citation } from './mistral'
 import { scoreAgent, describeCondition, formatClock } from './engine'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -24,7 +24,7 @@ let lessonPicked: string | null = null
 let lessonRevealed = false
 let draftAgent: Agent | null = null
 let diagnosis: DiagnosisId | '' = ''
-let coachLog: { role: 'coach' | 'you'; text: string }[] = []
+let coachLog: { role: 'coach' | 'you'; text: string; citations?: Citation[] }[] = []
 let coachBusy = false
 let coachLive: boolean | null = null
 let settingsOpen = false
@@ -588,6 +588,13 @@ function renderEvolutionLog(a: Agent, pattern: ReturnType<typeof getPattern>): s
 
 // ---------------------------------------------------------------- COACH PANEL
 
+function renderCitations(citations: Citation[] | undefined): string {
+  if (!citations?.length) return ''
+  return `<div class="coach-citations">${citations
+    .map((c) => `<a href="${esc(c.url)}" target="_blank" rel="noopener">🔗 ${esc(c.title)}</a>`)
+    .join('')}</div>`
+}
+
 function renderCoachPanel(): string {
   if (phase !== 'build' && !coachLog.length) return ''
   const open = coachLog.length > 0 || coachBusy
@@ -595,10 +602,10 @@ function renderCoachPanel(): string {
   return `<div class="coach-panel">
     <div class="coach-head"><span>🗣 SOCRATIC COACH ${coachLive === false ? '· offline (scripted)' : coachLive ? '· live' : ''}</span><button data-action="close-coach">✕</button></div>
     <div class="coach-log">${coachLog
-      .map((m) => `<div class="coach-msg ${m.role}"><b>${m.role === 'coach' ? 'Coach' : 'You'}</b><p>${esc(m.text)}</p></div>`)
+      .map((m) => `<div class="coach-msg ${m.role}"><b>${m.role === 'coach' ? 'Coach' : 'You'}</b><p>${esc(m.text)}</p>${renderCitations(m.citations)}</div>`)
       .join('')}${coachBusy ? `<div class="coach-msg coach"><b>Coach</b><p class="dots"><span></span><span></span><span></span></p></div>` : ''}</div>
     <form class="coach-input" data-coach-form>
-      <input type="text" data-coach-text placeholder="Answer back, or ask why…" ${coachBusy ? 'disabled' : ''} autocomplete="off" />
+      <input type="text" data-coach-text placeholder="Answer back, ask why, or ask 'is this real?'…" ${coachBusy ? 'disabled' : ''} autocomplete="off" />
       <button type="submit" ${coachBusy ? 'disabled' : ''}>→</button>
     </form>
   </div>`
@@ -617,7 +624,7 @@ function renderSettings(): string {
   return `<div class="modal-backdrop">
     <div class="modal">
       <div class="modal-head"><h3>Mistral API key</h3><button data-action="close-settings">✕</button></div>
-      <p class="modal-p">Mistral only NARRATES the deterministic verdict and proposes candidate edits — it never decides whether a rule fires; the engine does that with plain code, with or without a key. Your key is stored only in this browser's localStorage and sent straight to Mistral.</p>
+      <p class="modal-p">Mistral only NARRATES the deterministic verdict and proposes candidate edits — it never decides whether a rule fires; the engine does that with plain code, with or without a key. The coach can also search the web for real citations when you ask something like "is this real?" Your key is stored only in this browser's localStorage and sent straight to Mistral.</p>
       <p class="modal-p"><a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener">Get a Mistral key →</a></p>
       <label class="modal-field"><span>API key</span>
         <input type="password" data-settings-key placeholder="${masked || 'Mistral key…'}" autocomplete="off" />
@@ -1003,7 +1010,7 @@ app.addEventListener('submit', async (event) => {
     const agentForCoach = draftAgent ?? seedAgent()
     const r = await reply(agentForCoach, getPattern(agentForCoach.patternId), coachLog.slice(0, -1), text)
     coachLive = r.live
-    coachLog.push({ role: 'coach', text: r.text })
+    coachLog.push({ role: 'coach', text: r.text, citations: r.citations })
   } catch (e) {
     coachLog.push({ role: 'coach', text: 'Error: ' + (e as Error).message })
   }
