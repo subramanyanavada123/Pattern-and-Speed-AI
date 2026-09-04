@@ -1,4 +1,4 @@
-import type { SaveState, Agent, PartId, EvolutionEntry, RuleSet, ScenarioRun } from './types'
+import type { SaveState, Agent, PartId, EvolutionEntry, RuleSet, ScenarioRun, Pattern } from './types'
 
 const SAVE_KEY = 'pattern-machine.save.v3'
 const OLD_SAVE_KEY = 'pattern-machine.save.v2'
@@ -19,6 +19,7 @@ function blankSave(): SaveState {
     lastVisit: 0,
     streak: 0,
     sawMigrationNotice: false,
+    customPatterns: [],
   }
 }
 
@@ -103,6 +104,7 @@ function normalise(s: SaveState): SaveState {
     agents,
     completedLessons: Array.isArray(s.completedLessons) ? s.completedLessons : [],
     unlockedPatterns: Array.isArray(s.unlockedPatterns) && s.unlockedPatterns.length ? s.unlockedPatterns : base.unlockedPatterns,
+    customPatterns: Array.isArray(s.customPatterns) ? s.customPatterns : [],
   }
 }
 
@@ -135,6 +137,11 @@ function reconcile(mine: SaveState, disk: SaveState): SaveState {
       agents[id] = agent
     }
   }
+  const customPatterns = [...disk.customPatterns]
+  const knownCustomIds = new Set(customPatterns.map((p) => p.id))
+  for (const p of mine.customPatterns) {
+    if (!knownCustomIds.has(p.id)) customPatterns.push(p)
+  }
   return {
     agents,
     activeAgentId: mine.activeAgentId || disk.activeAgentId,
@@ -144,6 +151,7 @@ function reconcile(mine: SaveState, disk: SaveState): SaveState {
     lastVisit: Math.max(mine.lastVisit, disk.lastVisit),
     streak: Math.max(mine.streak, disk.streak),
     sawMigrationNotice: mine.sawMigrationNotice || disk.sawMigrationNotice,
+    customPatterns,
   }
 }
 
@@ -234,6 +242,25 @@ export const store = {
 
   isUnlocked(id: string): boolean {
     return state.unlockedPatterns.includes(id)
+  },
+
+  /** Save a newly-discovered custom pattern and immediately unlock it — the user just wrote it, there's no reason to gate it. */
+  addCustomPattern(pattern: Pattern) {
+    state.customPatterns.push(pattern)
+    state.unlockedPatterns.push(pattern.id)
+    persist()
+  },
+
+  /** Replace a stored custom pattern (e.g. after confirmScenario edits its scenarios). No-ops for built-in patterns. */
+  updateCustomPattern(pattern: Pattern) {
+    const idx = state.customPatterns.findIndex((p) => p.id === pattern.id)
+    if (idx === -1) return
+    state.customPatterns[idx] = pattern
+    persist()
+  },
+
+  customPatterns(): Pattern[] {
+    return state.customPatterns
   },
 
   /** Record one predict/reveal run against the active agent — the objective evidence corpus. */

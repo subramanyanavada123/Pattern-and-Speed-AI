@@ -1,6 +1,7 @@
 import './style.css'
-import type { Phase, PartId, DiagnosisId, Agent, Condition, RuleSet, PredictionResult, Scenario, RegressionCheck } from './types'
+import type { Phase, PartId, DiagnosisId, Agent, Condition, RuleSet, PredictionResult, Scenario, RegressionCheck, MatchTrace } from './types'
 import { patterns, getPattern, diagnosisCopy, lessonFor } from './patterns'
+import { discoverPattern, confirmScenario } from './discover'
 import { store, newAgent, keyStore, onExternalSave, justMigratedFromV2 } from './store'
 import { critique, reply } from './coach'
 import { runScenario, proposeStressScenario, pickNextScenario, type NarratedResult } from './simulator'
@@ -38,6 +39,11 @@ let abort: AbortController | null = null
 let migrationBannerDismissed = false
 /** Two-step confirm for "Start fresh" in Settings — one click arms it, a second within the same modal session confirms. */
 let resetArmed = false
+
+// ---- pattern discovery: turn a free-text description into a real custom Pattern ----
+let discoverText = ''
+let discoverBusy = false
+let discoverError = ''
 
 // ---- simulate (predict / reveal / compare / repair / replay) ----
 type SimPhase = 'predicting' | 'revealed'
@@ -256,10 +262,34 @@ function renderHome(): string {
 // ---------------------------------------------------------------- CHOOSE
 
 function renderChoose(): string {
+  const custom = store.customPatterns()
   return `<section class="screen">
     <div class="eyebrow">ACT I / SEE THE LOOP</div>
     <h1>Which loop has<br>been <em>running you?</em></h1>
-    <p class="lede">Pick the one that stings a little — that's usually the useful one. Locked loops open as you evolve an agent.</p>
+    <p class="lede">Pick one below, or describe your own — Mistral will pull the trigger, routine, reward, and a testable rule structure out of what you actually write.</p>
+
+    <div class="discover-card">
+      <div class="discover-head">
+        <span class="eyebrow">FIND YOUR OWN</span>
+        <h3>Describe a loop in your own words</h3>
+      </div>
+      <p class="discover-sub">One or two sentences. "I keep checking my phone every time a group project message comes in, even when I have nothing useful to say." Mistral extracts the shape and proposes something you can actually test.</p>
+      <textarea id="discover-text" rows="2" placeholder="e.g. Every time I get stuck on an assignment I open five tabs to 'research' and never come back to the doc" ${discoverBusy ? 'disabled' : ''}>${esc(discoverText)}</textarea>
+      ${discoverError ? `<p class="discover-error">${esc(discoverError)}</p>` : ''}
+      ${!keyStore.has() ? `<p class="discover-hint">Needs a Mistral key — <a href="#" data-action="settings">add one in Settings</a> to use this.</p>` : ''}
+      <button class="primary-action ${discoverBusy ? 'disabled' : ''}" data-action="discover-pattern" ${discoverBusy ? 'disabled' : ''}>${discoverBusy ? 'Reading the pattern…' : 'Figure out my pattern'} <span>→</span></button>
+    </div>
+
+    ${custom.length ? `<div class="custom-patterns-head"><span class="eyebrow">YOUR DISCOVERED LOOPS</span></div>` : ''}
+    <div class="pattern-grid">${custom
+      .map((p, i) => `<button class="pattern-card ${p.color} custom" data-pattern="${p.id}" style="--delay:${i * 45}ms">
+          <span class="card-top"><span class="pattern-icon">${p.icon}</span><span class="pattern-label">${p.label}</span><span class="card-arrow">✨</span></span>
+          <strong>${esc(p.title)}</strong>
+          <span class="card-trigger">Trigger: ${esc(p.trigger)}</span>
+        </button>`)
+      .join('')}</div>
+
+    ${custom.length ? `<div class="custom-patterns-head"><span class="eyebrow">OR START FROM ONE OF THESE</span></div>` : ''}
     <div class="pattern-grid">${patterns
       .map((p, i) => {
         const locked = !store.isUnlocked(p.id)
@@ -554,7 +584,8 @@ function renderSimulate(): string {
   // revealed
   const trace = narratedResult!.trace
   const isLive = scenario.kind === 'live'
-  const result = isLive ? null : scoreAgent(trace, currentScenario!.expectedFire)
+  const needsConfirm = !isLive && !scenario.verified
+  const result = (isLive || needsConfirm) ? null : scoreAgent(trace, currentScenario!.expectedFire)
   const predictionCorrect = trace.fired === userPrediction
   const meta = result ? predictionMeta(result) : null
 
@@ -564,6 +595,25 @@ function renderSimulate(): string {
       ${trace.exceptions.map((e) => `<div class="trace-row"><span>UNLESS ${esc(describeCondition(e.condition, p.flags))}</span><span class="${e.met ? 'trace-true' : 'trace-false'}">${e.met ? 'TRUE (suppresses)' : 'FALSE'}</span></div>`).join('')}
       <div class="trace-row trace-verdict"><span>FIRED?</span><span class="${trace.fired ? 'trace-true' : 'trace-false'}">${trace.fired ? 'YES' : 'NO'}</span></div>
     </div>`
+
+  if (needsConfirm) {
+    return `<section class="screen sim-screen">
+      <div class="eyebrow">ACT III / CONFIRM · MISTRAL'S GUESS, NOT GROUND TRUTH YET</div>
+      <div class="sim-source live">✨ AI-GENERATED SCENARIO — expectedFire is a guess until you confirm it</div>
+      <h2>Your rule ${trace.fired ? 'fired' : 'stayed quiet'}<br><em>here. Is that actually right?</em></h2>
+      ${ruleSummary}
+      <div class="scenario-card"><p class="scenario-scene">${esc(narratedResult!.sceneNarration)}</p></div>
+      ${traceTable}
+      <div class="compare-banner tone-mute">
+        <b>Mistral guessed this scenario should ${scenario.expectedFire ? 'fire' : 'stay quiet'}.</b> Your rule actually ${trace.fired ? 'fired' : 'stayed quiet'}. Before this counts as evidence, tell us: based on your real experience of this loop, what SHOULD happen here?
+      </div>
+      <div class="confirm-actions">
+        <button class="secondary-action" data-confirm-fire="true">It should fire ✓</button>
+        <button class="secondary-action" data-confirm-fire="false">It should stay quiet ·</button>
+      </div>
+      <p class="sim-note">Once confirmed, this becomes a real test case for this pattern — reused for future runs and regression checks, exactly like an authored scenario.</p>
+    </section>`
+  }
 
   if (isLive) {
     return `<section class="screen sim-screen">
@@ -980,6 +1030,7 @@ app.addEventListener('click', async (event) => {
   const condToggle = t.closest<HTMLButtonElement>('[data-cond-toggle]')
   const actionPick = t.closest<HTMLButtonElement>('[data-action-pick]')?.dataset.actionPick
   const predict = t.closest<HTMLButtonElement>('[data-predict]')?.dataset.predict
+  const confirmFire = t.closest<HTMLButtonElement>('[data-confirm-fire]')?.dataset.confirmFire
 
   if (t.closest('[data-stop]') && !action) return
 
@@ -1025,6 +1076,10 @@ app.addEventListener('click', async (event) => {
   if (action === 'settings') { settingsOpen = true; render(); return }
 
   // ---- choose
+  if (action === 'discover-pattern') {
+    await doDiscoverPattern()
+    return
+  }
   if (patternId) {
     workingPatternId = patternId
     diagnosis = store.getAgent(patternId)?.diagnosis || ''
@@ -1100,6 +1155,10 @@ app.addEventListener('click', async (event) => {
   if (predict !== undefined) {
     userPrediction = predict === 'true'
     await doReveal()
+    return
+  }
+  if (confirmFire !== undefined) {
+    await doConfirmScenario(confirmFire === 'true')
     return
   }
   if (action === 'sim-next') {
@@ -1239,7 +1298,40 @@ app.addEventListener('input', (event) => {
   if ((el as HTMLElement).hasAttribute?.('data-agent-notes') && draftAgent) {
     draftAgent.learnNotes = (el as HTMLTextAreaElement).value
   }
+  if ((el as HTMLElement).id === 'discover-text') {
+    discoverText = (el as HTMLTextAreaElement).value
+  }
 })
+
+/**
+ * Score a verified scenario's outcome, record it as evidence, advance/break
+ * the Shift, and if the call was wrong, ask for an evolution proposal. Shared
+ * by the normal reveal path and the post-confirmation path (a just-confirmed
+ * scenario is scored exactly the same way a hand-authored one always was).
+ */
+async function scoreAndRecord(agent: Agent, scenario: Scenario, trace: MatchTrace, signal?: AbortSignal) {
+  const result: PredictionResult = scoreAgent(trace, scenario.expectedFire)
+  const predictionCorrect = trace.fired === userPrediction
+  const updated = store.recordScenarioRun({
+    at: Date.now(), scenarioId: scenario.id, agentVersion: agent.version,
+    userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
+  })
+  shiftJustBroke = false
+  if (result === 'correct') {
+    shiftLength += 1
+  } else {
+    shiftJustBroke = true
+    shiftLengthAtBreak = shiftLength
+    store.recordShiftResult(shiftLength)
+    shiftLength = 0
+  }
+  if (result !== 'correct' && updated) {
+    evolving = true
+    render()
+    pendingEvolution = await proposeEvolution(updated, getPattern(updated.patternId), scenario.id, result, previouslyCorrectScenarioIds(updated), signal)
+    evolving = false
+  }
+}
 
 async function doReveal() {
   const agent = store.activeAgent() ?? draftAgent
@@ -1256,34 +1348,44 @@ async function doReveal() {
     const trace = narratedResult.trace
     if (narratedResult.fallbackReason) showToast(`Mistral unavailable: ${narratedResult.fallbackReason}`)
 
-    shiftJustBroke = false
     if (currentScenario.kind === 'live') {
       // A real-world moment has no trustworthy expectedFire to score against —
       // show the trace as pure observation, but don't record it as evidence,
       // don't let it drive an evolution proposal off a fabricated verdict, and
       // don't let it affect the Shift streak either way.
+    } else if (!currentScenario.verified) {
+      // AI-generated expectedFire is a guess, not ground truth yet. Show the
+      // trace, but hold off scoring/shift/evolution until the user confirms
+      // (or corrects) it — see doConfirmScenario — otherwise the evidence
+      // corpus that gates future evolutions would be built on an unverified guess.
     } else {
-      const result: PredictionResult = scoreAgent(trace, currentScenario.expectedFire)
-      const predictionCorrect = trace.fired === userPrediction
-      const updated = store.recordScenarioRun({
-        at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
-        userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
-      })
-      if (result === 'correct') {
-        shiftLength += 1
-      } else {
-        shiftJustBroke = true
-        shiftLengthAtBreak = shiftLength
-        store.recordShiftResult(shiftLength)
-        shiftLength = 0
-      }
-      if (result !== 'correct' && updated) {
-        evolving = true
-        render()
-        pendingEvolution = await proposeEvolution(updated, getPattern(updated.patternId), currentScenario.id, result, previouslyCorrectScenarioIds(updated), abort.signal)
-        evolving = false
-      }
+      await scoreAndRecord(agent, currentScenario, trace, abort.signal)
     }
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') showToast('Error: ' + (e as Error).message)
+  } finally {
+    simBusy = false
+    abort = null
+    render()
+  }
+}
+
+/** User confirmed (or corrected) an AI-generated scenario's expectedFire. Persist it as real ground truth, then score the run that's already on screen against it. */
+async function doConfirmScenario(userSaysShouldFire: boolean) {
+  const agent = store.activeAgent() ?? draftAgent
+  if (!agent || !currentScenario || !narratedResult) return
+  const pattern = getPattern(agent.patternId)
+
+  const confirmed = confirmScenario(pattern, currentScenario.id, userSaysShouldFire)
+  if (pattern.custom) store.updateCustomPattern(confirmed)
+  const confirmedScenario = confirmed.scenarios.find((s) => s.id === currentScenario!.id)!
+  currentScenario = confirmedScenario
+
+  simBusy = true
+  abort = new AbortController()
+  render()
+  try {
+    await scoreAndRecord(agent, confirmedScenario, narratedResult.trace, abort.signal)
   } catch (e) {
     if ((e as Error).name !== 'AbortError') showToast('Error: ' + (e as Error).message)
   } finally {
@@ -1324,6 +1426,7 @@ async function doUseRealWorld() {
       // value is never read because 'live' scenarios skip correctness scoring
       // and never enter the regression corpus. See ScenarioKind's doc comment.
       expectedFire: false,
+      verified: false,
     }
     narratedResult = null
     simPhase = 'predicting'
@@ -1332,6 +1435,35 @@ async function doUseRealWorld() {
     realWorldError = e instanceof RealWorldError ? e.message : 'Could not get real-world data. Using the scenario as authored.'
   } finally {
     realWorldBusy = false
+    render()
+  }
+}
+
+async function doDiscoverPattern() {
+  if (discoverBusy) return
+  discoverBusy = true
+  discoverError = ''
+  render()
+  try {
+    const result = await discoverPattern(discoverText)
+    if (!result.ok) {
+      discoverError = result.error
+      return
+    }
+    store.addCustomPattern(result.pattern)
+    discoverText = ''
+    showToast(`Found it: "${result.pattern.title}" — pick it below to start building.`)
+    workingPatternId = result.pattern.id
+    diagnosis = ''
+    draftAgent = null
+    lessonIndex = 0; lessonPicked = null; lessonRevealed = false
+    scenarioToReplay = null
+    isReplaying = false
+    go('decode')
+  } catch (e) {
+    discoverError = e instanceof Error ? e.message : 'Something went wrong. Try again.'
+  } finally {
+    discoverBusy = false
     render()
   }
 }

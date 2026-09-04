@@ -1,4 +1,5 @@
 import type { Pattern, Lesson, DiagnosisId } from './types'
+import { store } from './store'
 
 /**
  * Six loops common to engineering-student life, each with a small fixed
@@ -24,16 +25,16 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'scroll-normal', patternId: 'scroll', kind: 'normal', title: 'Late-night autoplay, deadline tomorrow',
         sceneText: 'It is 9:40pm, the report is due at 9am, and a video just ended with your phone already in hand.',
-        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: true, alreadyOnBreak: false }, expectedFire: true, fromMistral: false },
+        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: true, alreadyOnBreak: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'scroll-edge', patternId: 'scroll', kind: 'edge', title: 'Scheduled break, deadline tomorrow',
         sceneText: 'Same deadline pressure, but you deliberately started your one scheduled break 10 minutes ago.',
-        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: true, alreadyOnBreak: true }, expectedFire: false, fromMistral: false },
+        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: true, alreadyOnBreak: true }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'scroll-exception', patternId: 'scroll', kind: 'exception', title: 'No deadline this week',
         sceneText: 'It is a quiet Tuesday evening with nothing due for a week. A video ends, phone in hand.',
-        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: false, phoneInHand: true, alreadyOnBreak: false }, expectedFire: false, fromMistral: false },
+        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: false, phoneInHand: true, alreadyOnBreak: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'scroll-stress', patternId: 'scroll', kind: 'stress', title: 'Deadline in 24h, but phone is face-down across the room',
         sceneText: 'Deadline is tomorrow, but your phone is charging across the room, not in hand.',
-        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: false, alreadyOnBreak: false }, expectedFire: false, fromMistral: false },
+        clockMin: 21 * 60 + 40, dayOfWeek: 2, flags: { deadlineWithin24h: true, phoneInHand: false, alreadyOnBreak: false }, expectedFire: false, fromMistral: false, verified: true },
     ],
   },
   {
@@ -55,19 +56,19 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'gym-normal', patternId: 'gym', kind: 'normal', title: 'Late lab, bag not staged',
         sceneText: 'Lab ran 40 minutes over. The gym bag is still upstairs, untouched since this morning.',
-        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: false, isRaining: false }, expectedFire: true, fromMistral: false },
+        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: false, isRaining: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'gym-edge', patternId: 'gym', kind: 'edge', title: 'Late lab, but bag already staged',
         sceneText: 'Same late lab, but the bag has been sitting packed by the door since 8am.',
-        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: true, alreadyTrainedToday: false, isRaining: false }, expectedFire: false, fromMistral: false },
+        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: true, alreadyTrainedToday: false, isRaining: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'gym-exception', patternId: 'gym', kind: 'exception', title: 'Already trained this morning',
         sceneText: 'Lab ran late again, but you already did a 6am session before class.',
-        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: true, isRaining: false }, expectedFire: false, fromMistral: false },
+        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: true, isRaining: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'gym-stress', patternId: 'gym', kind: 'stress', title: 'On time day, bag not staged',
         sceneText: 'No lab overrun today, everything ended on schedule, but the bag is still upstairs.',
-        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: false, bagPacked: false, alreadyTrainedToday: false, isRaining: false }, expectedFire: false, fromMistral: false },
+        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: false, bagPacked: false, alreadyTrainedToday: false, isRaining: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'gym-rain', patternId: 'gym', kind: 'stress', title: 'Late lab, and it is pouring outside',
         sceneText: 'Lab ran late again, and the walk to the gym is now genuinely unpleasant — it is raining hard.',
-        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: false, isRaining: true }, expectedFire: true, fromMistral: false },
+        clockMin: 18 * 60 + 10, dayOfWeek: 3, flags: { labRanLate: true, bagPacked: false, alreadyTrainedToday: false, isRaining: true }, expectedFire: true, fromMistral: false, verified: true },
     ],
   },
   {
@@ -87,16 +88,16 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'cart-normal', patternId: 'cart', kind: 'normal', title: 'Late night, stressful day, full cart',
         sceneText: 'It is 12:50am after a genuinely rough day, and the cart has three items ready to buy.',
-        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: false }, expectedFire: true, fromMistral: false },
+        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'cart-edge', patternId: 'cart', kind: 'edge', title: 'Late night, calm day, full cart',
         sceneText: 'Same time, same cart, but today was actually a good, low-stress day.',
-        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: false, hasGenuineDeadlinePurchase: false }, expectedFire: false, fromMistral: false },
+        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: false, hasGenuineDeadlinePurchase: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'cart-exception', patternId: 'cart', kind: 'exception', title: 'Textbook needed for tomorrow\'s exam',
         sceneText: 'Stressful day, cart is full, but it is the required textbook for tomorrow\'s open-book exam.',
-        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: true }, expectedFire: false, fromMistral: false },
+        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: true, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: true }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'cart-stress', patternId: 'cart', kind: 'stress', title: 'Stressful day, but cart is empty',
         sceneText: 'Rough day, browser open, but nothing is actually in the cart yet — just browsing.',
-        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: false, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: false }, expectedFire: false, fromMistral: false },
+        clockMin: 0 * 60 + 50, dayOfWeek: 4, flags: { cartHasItems: false, hadStressfulDayToday: true, hasGenuineDeadlinePurchase: false }, expectedFire: false, fromMistral: false, verified: true },
     ],
   },
   {
@@ -116,16 +117,16 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'tabs-normal', patternId: 'tabs', kind: 'normal', title: 'Stuck paragraph, tab explosion',
         sceneText: 'Seven tabs open, the assignment doc hasn\'t changed in 12 minutes.',
-        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: true, isScheduledResearchTime: false }, expectedFire: true, fromMistral: false },
+        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: true, isScheduledResearchTime: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'tabs-edge', patternId: 'tabs', kind: 'edge', title: 'Many tabs, but still actively writing',
         sceneText: 'Seven tabs open, but the assignment doc is being actively edited between lookups.',
-        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: false, isScheduledResearchTime: false }, expectedFire: false, fromMistral: false },
+        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: false, isScheduledResearchTime: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'tabs-exception', patternId: 'tabs', kind: 'exception', title: 'Scheduled literature review session',
         sceneText: 'This is a dedicated hour deliberately set aside for reading around the topic.',
-        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: true, isScheduledResearchTime: true }, expectedFire: false, fromMistral: false },
+        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: true, originalTaskUntouched: true, isScheduledResearchTime: true }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'tabs-stress', patternId: 'tabs', kind: 'stress', title: 'Doc untouched, but only 3 tabs open',
         sceneText: 'The doc hasn\'t moved in 15 minutes, but there are only three tabs open, not seven.',
-        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: false, originalTaskUntouched: true, isScheduledResearchTime: false }, expectedFire: false, fromMistral: false },
+        clockMin: 14 * 60 + 20, dayOfWeek: 2, flags: { sevenPlusTabsOpen: false, originalTaskUntouched: true, isScheduledResearchTime: false }, expectedFire: false, fromMistral: false, verified: true },
     ],
   },
   {
@@ -145,16 +146,16 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'sleep-normal', patternId: 'sleep', kind: 'normal', title: 'Fully scheduled day, early class tomorrow',
         sceneText: 'Back-to-back classes all day, nothing personal, and an 8am lecture tomorrow.',
-        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: true, hadPersonalTimeToday: false }, expectedFire: true, fromMistral: false },
+        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: true, hadPersonalTimeToday: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'sleep-edge', patternId: 'sleep', kind: 'edge', title: 'Fully scheduled day, no early class tomorrow',
         sceneText: 'Same packed day, but tomorrow\'s first class isn\'t until noon.',
-        clockMin: 1 * 60 + 15, dayOfWeek: 5, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: false, hadPersonalTimeToday: false }, expectedFire: false, fromMistral: false },
+        clockMin: 1 * 60 + 15, dayOfWeek: 5, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: false, hadPersonalTimeToday: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'sleep-exception', patternId: 'sleep', kind: 'exception', title: 'Already had personal time today',
         sceneText: 'Packed schedule, but you had a genuine hour to yourself at lunch today.',
-        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: true, hadPersonalTimeToday: true }, expectedFire: false, fromMistral: false },
+        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: true, hasEarlyClassTomorrow: true, hadPersonalTimeToday: true }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'sleep-stress', patternId: 'sleep', kind: 'stress', title: 'Light day, early class tomorrow',
         sceneText: 'Today was actually a light day with free periods, and there\'s an 8am class tomorrow.',
-        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: false, hasEarlyClassTomorrow: true, hadPersonalTimeToday: false }, expectedFire: false, fromMistral: false },
+        clockMin: 1 * 60 + 15, dayOfWeek: 1, flags: { dayWasFullySchedule: false, hasEarlyClassTomorrow: true, hadPersonalTimeToday: false }, expectedFire: false, fromMistral: false, verified: true },
     ],
   },
   {
@@ -174,22 +175,30 @@ export const patterns: Pattern[] = [
     scenarios: [
       { id: 'reply-normal', patternId: 'reply', kind: 'normal', title: 'Three days unanswered, needs a real update',
         sceneText: 'The teammate\'s question has sat for three days and genuinely needs more than a one-liner.',
-        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: false }, expectedFire: true, fromMistral: false },
+        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: false }, expectedFire: true, fromMistral: false, verified: true },
       { id: 'reply-edge', patternId: 'reply', kind: 'edge', title: 'Only a few hours old',
         sceneText: 'The message arrived a few hours ago, well under the 48-hour mark.',
-        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: false, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: false }, expectedFire: false, fromMistral: false },
+        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: false, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: false }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'reply-exception', patternId: 'reply', kind: 'exception', title: 'Already replied today',
         sceneText: 'Old message, but you already sent a substantive reply in this thread earlier today.',
-        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: true }, expectedFire: false, fromMistral: false },
+        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: true, alreadyRepliedToThisThread: true }, expectedFire: false, fromMistral: false, verified: true },
       { id: 'reply-stress', patternId: 'reply', kind: 'stress', title: 'Old message, but just needs a thumbs-up',
         sceneText: 'The message is three days old, but it only needs a quick acknowledgment, not a real update.',
-        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: false, alreadyRepliedToThisThread: false }, expectedFire: false, fromMistral: false },
+        clockMin: 20 * 60, dayOfWeek: 0, flags: { messageOlderThan48h: true, messageNeedsRealAnswer: false, alreadyRepliedToThisThread: false }, expectedFire: false, fromMistral: false, verified: true },
     ],
   },
 ]
 
 export function getPattern(id: string): Pattern {
-  return patterns.find((p) => p.id === id) ?? patterns[0]
+  const builtin = patterns.find((p) => p.id === id)
+  if (builtin) return builtin
+  const custom = store.customPatterns().find((p) => p.id === id)
+  return custom ?? patterns[0]
+}
+
+/** All patterns available to Choose right now: the six built-ins plus anything the user has discovered. */
+export function allPatterns(): Pattern[] {
+  return [...patterns, ...store.customPatterns()]
 }
 
 export const diagnosisCopy: Record<DiagnosisId, { title: string; sub: string }> = {

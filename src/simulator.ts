@@ -106,6 +106,10 @@ Make it a genuinely tricky edge case, different from an obvious normal case. You
       patternId: pattern.id,
       kind: 'stress' as const,
       fromMistral: true,
+      // Mistral's expectedFire here is a guess, not authored ground truth — it
+      // must not silently enter the regression/evolution evidence corpus the
+      // way a hand-authored scenario does. See Scenario.verified's doc comment.
+      verified: false,
       ...parsed,
     }
     if (!isValidScenario(candidate, pattern)) {

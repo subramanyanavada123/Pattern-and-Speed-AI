@@ -1,0 +1,1236 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>The Pattern Machine</title>
+<meta name="description" content="A 40-slide, meme-forward symposium lecture: spot the loops running your life and your city, then build the agent that runs them better.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  /* ================= TOKENS ================= */
+  :root{
+    --ink:#0B0D12;
+    --panel:#151922;
+    --panel-2:#1E2430;
+    --bone:#F7F4EB;
+    --signal:#4BE39C;
+    --pulse:#FF5C7A;
+    --amber:#FFB454;
+    --violet:#9B8CFF;
+    --sky:#4FC3F7;
+    --slate:#8794A8;
+
+    --bg:var(--ink);
+    --surface:var(--panel);
+    --surface-raise:var(--panel-2);
+    --text:var(--bone);
+    --text-soft:#CDC9BC;
+    --muted:var(--slate);
+    --rule:rgba(135,148,168,.24);
+    --accent:var(--signal);
+    --hot:var(--pulse);
+    --det:var(--amber);
+    --non:var(--violet);
+    --city:var(--sky);
+    --card-bg:#0F131A;
+    --maxw:1240px;
+
+    --paper:#F5F0E2;
+    --paper-ink:#161309;
+    --paper-muted:#6C6350;
+  }
+  @media (prefers-color-scheme:light){
+    :root:not([data-theme="dark"]){
+      --bg:#ECE8DC; --surface:#F6F2E8; --surface-raise:#FCFAF2;
+      --text:#12151D; --text-soft:#39404C; --muted:#586477;
+      --rule:rgba(18,21,29,.15); --card-bg:#FCFAF2;
+      --accent:#0F8A5A; --hot:#D63B5C; --det:#C77A1B; --non:#6B58D6; --city:#1C86C0;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#ECE8DC; --surface:#F6F2E8; --surface-raise:#FCFAF2;
+    --text:#12151D; --text-soft:#39404C; --muted:#586477;
+    --rule:rgba(18,21,29,.15); --card-bg:#FCFAF2;
+    --accent:#0F8A5A; --hot:#D63B5C; --det:#C77A1B; --non:#6B58D6; --city:#1C86C0;
+  }
+  :root[data-theme="dark"]{
+    --bg:var(--ink); --surface:var(--panel); --surface-raise:var(--panel-2);
+    --text:var(--bone); --text-soft:#CDC9BC; --muted:var(--slate);
+    --rule:rgba(135,148,168,.24); --card-bg:#0F131A;
+    --accent:var(--signal); --hot:var(--pulse); --det:var(--amber); --non:var(--violet); --city:var(--sky);
+  }
+
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  @media (prefers-reduced-motion:reduce){ html{scroll-behavior:auto;} }
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:"Newsreader",Georgia,"Times New Roman",serif;
+    font-size:17px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+
+  /* ================= DECK MECHANICS ================= */
+  .deck{ scroll-snap-type:y mandatory; height:100vh; overflow-y:scroll; overflow-x:hidden; scrollbar-width:none; }
+  .deck::-webkit-scrollbar{display:none;}
+  .slide{
+    scroll-snap-align:start; scroll-snap-stop:always;
+    min-height:100vh; width:100%;
+    display:flex; flex-direction:column; justify-content:center;
+    padding:clamp(24px,5.5vh,66px) clamp(20px,6.5vw,104px);
+    position:relative; border-bottom:1px solid var(--rule);
+  }
+  .slide__inner{ width:100%; max-width:var(--maxw); margin:0 auto; }
+
+  .rail{ position:fixed; left:0; top:0; bottom:0; width:4px; background:var(--rule); z-index:60; }
+  .rail__fill{
+    position:absolute; left:0; top:0; width:100%; height:0;
+    background:linear-gradient(180deg,var(--accent),var(--city),var(--hot));
+    transition:height .18s linear;
+  }
+  @media (prefers-reduced-motion:reduce){ .rail__fill{transition:none;} }
+
+  .hud{
+    position:fixed; right:clamp(14px,3vw,32px); bottom:clamp(14px,3vh,28px); z-index:60;
+    display:flex; align-items:center; gap:14px;
+    font-family:"JetBrains Mono",ui-monospace,monospace; font-size:12px; color:var(--muted); letter-spacing:.08em;
+  }
+  .hud__count b{color:var(--text);font-weight:700;}
+  .hud__btns{display:flex;gap:6px;}
+  .hud button{
+    font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--rule);
+    width:34px;height:34px;border-radius:2px;cursor:pointer; display:grid;place-items:center;
+    transition:border-color .15s,color .15s;
+  }
+  .hud button:hover{border-color:var(--accent);color:var(--accent);}
+  .hud button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .themebtn{
+    position:fixed; left:clamp(14px,3vw,28px); bottom:clamp(14px,3vh,28px); z-index:60;
+    font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted); background:transparent; border:1px solid var(--rule); padding:8px 12px;border-radius:2px;cursor:pointer;
+    transition:border-color .15s,color .15s;
+  }
+  .themebtn:hover{border-color:var(--accent);color:var(--accent);}
+  .themebtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  /* ================= TYPE ================= */
+  .eyebrow{
+    font-family:"JetBrains Mono",ui-monospace,monospace;
+    font-size:12px;letter-spacing:.22em;text-transform:uppercase; color:var(--accent);
+    display:flex;align-items:center;gap:12px; margin:0 0 clamp(12px,2.6vh,24px);
+  }
+  .eyebrow::before{content:"";width:32px;height:1px;background:var(--accent);display:inline-block;}
+  .eyebrow--hot{color:var(--hot);} .eyebrow--hot::before{background:var(--hot);}
+  .eyebrow--non{color:var(--non);} .eyebrow--non::before{background:var(--non);}
+  .eyebrow--city{color:var(--city);} .eyebrow--city::before{background:var(--city);}
+
+  h1.slide__title{
+    font-family:"Space Grotesk",system-ui,sans-serif; font-weight:700;
+    font-size:clamp(2rem,5.6vw,4.4rem); line-height:1.0; letter-spacing:-0.024em;
+    margin:0 0 clamp(12px,2.4vh,22px); text-wrap:balance;
+  }
+  h2.slide__title{
+    font-family:"Space Grotesk",system-ui,sans-serif; font-weight:600;
+    font-size:clamp(1.55rem,4vw,3rem); line-height:1.06; letter-spacing:-0.016em;
+    margin:0 0 clamp(12px,2.2vh,20px); text-wrap:balance;
+  }
+  .lead{ font-size:clamp(1.02rem,1.6vw,1.35rem); line-height:1.5; color:var(--text-soft); max-width:56ch; margin:0 0 1em; }
+  .body p{max-width:60ch;margin:0 0 .8em;color:var(--text-soft);}
+  .body p:last-child{margin-bottom:0;}
+  strong,.body strong{color:var(--text);font-weight:600;}
+  .kw{color:var(--accent);font-weight:500;}
+  .kw--hot{color:var(--hot);font-weight:500;}
+  .kw--det{color:var(--det);font-weight:500;}
+  .kw--non{color:var(--non);font-weight:500;}
+  .kw--city{color:var(--city);font-weight:500;}
+  .mono{font-family:"JetBrains Mono",ui-monospace,monospace;}
+
+  /* ================= BLOCK GRIDS ================= */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,3.4vw,44px);align-items:start;}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,24px);}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(12px,1.6vw,18px);}
+  .grid2-1{display:grid;grid-template-columns:1.4fr 1fr;gap:clamp(16px,3vw,40px);align-items:center;}
+  @media (max-width:900px){ .grid3,.grid4,.grid2-1{grid-template-columns:1fr;} .grid2{grid-template-columns:1fr;} }
+  @media (max-width:900px){ .grid4--keep2{grid-template-columns:1fr 1fr;} }
+
+  .card{ background:var(--card-bg); border:1px solid var(--rule); border-radius:4px; padding:clamp(15px,2.2vw,24px); }
+  .card h3{ font-family:"Space Grotesk",system-ui,sans-serif; font-size:1.02rem;font-weight:600;margin:0 0 .4em;letter-spacing:-0.01em; }
+  .card p{font-size:.94rem;color:var(--text-soft);margin:0;line-height:1.5;}
+  .card .tag{
+    font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);display:block;margin-bottom:.6em;
+  }
+  .card .emoji{font-size:1.7rem;line-height:1;display:block;margin-bottom:.5em;}
+  .card--accent{border-color:color-mix(in srgb,var(--accent) 55%,transparent);} .card--accent .tag{color:var(--accent);}
+  .card--hot{border-color:color-mix(in srgb,var(--hot) 55%,transparent);} .card--hot .tag{color:var(--hot);}
+  .card--det{border-color:color-mix(in srgb,var(--det) 55%,transparent);} .card--det .tag{color:var(--det);}
+  .card--non{border-color:color-mix(in srgb,var(--non) 55%,transparent);} .card--non .tag{color:var(--non);}
+  .card--city{border-color:color-mix(in srgb,var(--city) 55%,transparent);} .card--city .tag{color:var(--city);}
+
+  /* big number / stat blocks */
+  .statgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,24px);margin-top:clamp(16px,3vh,28px);}
+  @media (max-width:760px){ .statgrid{grid-template-columns:1fr;} }
+  .stat{border:1px solid var(--rule);border-radius:4px;padding:clamp(18px,2.4vw,28px);background:var(--card-bg);}
+  .stat .n{
+    font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;
+    font-size:clamp(2.2rem,4.4vw,3.4rem);line-height:1;letter-spacing:-0.03em;color:var(--accent);
+    font-variant-numeric:tabular-nums;
+  }
+  .stat .n.hot{color:var(--hot);} .stat .n.city{color:var(--city);}
+  .stat .l{margin-top:.5em;font-size:.92rem;color:var(--text-soft);line-height:1.4;}
+
+  ul.ticks{list-style:none;padding:0;margin:.8em 0 0;}
+  ul.ticks li{padding-left:24px;position:relative;margin-bottom:.55em;color:var(--text-soft);max-width:60ch;}
+  ul.ticks li::before{content:"▸";position:absolute;left:0;top:0;color:var(--accent);}
+  ul.ticks--hot li::before{color:var(--hot);}
+  ul.ticks--non li::before{color:var(--non);}
+  ul.ticks--city li::before{color:var(--city);}
+
+  .callout{ border-left:3px solid var(--accent); padding:5px 0 5px 20px; margin:1.2em 0 0; font-size:1.05rem; color:var(--text); max-width:56ch; }
+  .callout--hot{border-color:var(--hot);}
+  .callout--non{border-color:var(--non);}
+  .callout--det{border-color:var(--det);}
+  .callout--city{border-color:var(--city);}
+
+  .tiny{font-size:.8rem;color:var(--muted);}
+  .kbd{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.82em;border:1px solid var(--rule);border-bottom-width:2px;border-radius:3px;padding:1px 6px;color:var(--text);background:var(--surface);}
+
+  /* the loop chip row */
+  .loopflow{display:flex;flex-wrap:wrap;gap:0;margin-top:clamp(16px,3vh,28px);}
+  .loopflow .node{
+    flex:1 1 0;min-width:130px;border:1px solid var(--rule);border-right:none;padding:14px 16px;position:relative;
+  }
+  .loopflow .node:last-child{border-right:1px solid var(--rule);}
+  .loopflow .node .k{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.12em;color:var(--accent);display:block;margin-bottom:.4em;text-transform:uppercase;}
+  .loopflow .node .v{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;font-size:.98rem;color:var(--text);display:block;margin-bottom:.25em;}
+  .loopflow .node .d{font-size:.82rem;color:var(--muted);line-height:1.4;}
+
+  pre.snippet{
+    font-family:"JetBrains Mono",ui-monospace,monospace; font-size:clamp(.76rem,1vw,.92rem); line-height:1.65;
+    background:var(--card-bg); border:1px solid var(--rule); border-radius:4px;
+    padding:clamp(14px,1.8vw,22px); overflow-x:auto; color:var(--text-soft); margin:1em 0 0;
+  }
+  pre.snippet .c{color:var(--muted);}
+  pre.snippet .g{color:var(--accent);}
+  pre.snippet .o{color:var(--hot);}
+  pre.snippet .v{color:var(--non);}
+
+  .archdiag{display:grid;gap:12px;margin-top:clamp(16px,3vh,28px);}
+  .archrow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;}
+  .block{border:1px solid var(--rule);border-radius:4px;padding:11px 15px;background:var(--card-bg);flex:1 1 130px;min-width:130px;}
+  .block .bt{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:.35em;}
+  .block .bn{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;font-size:.96rem;color:var(--text);}
+  .block--core{border-color:color-mix(in srgb,var(--non) 60%,transparent);background:color-mix(in srgb,var(--non) 8%,var(--card-bg));} .block--core .bt{color:var(--non);}
+  .block--det{border-color:color-mix(in srgb,var(--det) 60%,transparent);background:color-mix(in srgb,var(--det) 8%,var(--card-bg));} .block--det .bt{color:var(--det);}
+  .flowlabel{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;color:var(--muted);align-self:center;padding:0 2px;}
+
+  .compare{
+    display:grid;grid-template-columns:.9fr 1fr 1fr;
+    border:1px solid var(--rule);border-radius:4px;overflow:hidden;margin-top:clamp(16px,3vh,26px);font-size:.93rem;
+  }
+  .compare > div{padding:12px 16px;border-bottom:1px solid var(--rule);}
+  .compare .h{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;background:var(--surface);color:var(--text);}
+  .compare .h.det{color:var(--det);}
+  .compare .h.non{color:var(--non);}
+  .compare .rowlabel{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.05em;color:var(--muted);text-transform:uppercase;background:color-mix(in srgb,var(--surface) 55%,transparent);}
+  .compare > div:nth-last-child(-n+3){border-bottom:none;}
+  .compare .c{color:var(--text-soft);}
+  @media (max-width:900px){ .compare{grid-template-columns:1fr;} .compare .rowlabel{border-bottom:none;} }
+
+  .footer-note{position:absolute;left:clamp(20px,6.5vw,104px);top:clamp(18px,3.6vh,40px);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);}
+
+  /* ================= TITLE ================= */
+  .slide--title .slide__inner{max-width:1040px;}
+  #hero-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:0;opacity:.5;}
+  .slide--title > *{position:relative;z-index:1;}
+  .titlecard{
+    background:color-mix(in srgb,var(--bg) 74%, transparent); backdrop-filter:blur(2px);
+    border:1px solid var(--rule);border-radius:5px; padding:clamp(24px,4.6vw,54px);
+  }
+  .titlecard .kicker{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--accent);margin:0 0 1.3em;}
+  .titlecard h1{
+    font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;
+    font-size:clamp(2.6rem,7.4vw,5.6rem);line-height:.96;letter-spacing:-0.034em;margin:0 0 .28em;text-wrap:balance;
+  }
+  .titlecard .sub{font-family:"Newsreader",serif;font-style:italic;font-size:clamp(1.05rem,2.3vw,1.6rem);color:var(--text-soft);margin:0 0 1.5em;}
+  .titlecard .meta{
+    display:flex;flex-wrap:wrap;gap:10px 24px;
+    font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.08em;color:var(--muted);
+    padding-top:1.3em;border-top:1px solid var(--rule);
+  }
+  .titlecard .meta b{color:var(--text);font-weight:500;}
+
+  /* ================= STATEMENT ================= */
+  .slide--statement .slide__inner{max-width:1040px;}
+  .statement{
+    font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;
+    font-size:clamp(1.75rem,4.8vw,3.6rem);line-height:1.12;letter-spacing:-0.022em;text-wrap:balance;margin:0;
+  }
+  .statement .hl{color:var(--accent);}
+  .statement .hlh{color:var(--hot);}
+  .statement .hld{color:var(--det);}
+  .statement .hln{color:var(--non);}
+  .statement .hlc{color:var(--city);}
+  .attrib{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:1.8em;}
+
+  /* ================= MEME SLIDES ================= */
+  .slide--meme{ background:linear-gradient(0deg, color-mix(in srgb,var(--paper) 88%, #000 12%), var(--paper)); }
+  .slide--meme .slide__inner{max-width:1080px;}
+  .slide--meme .eyebrow{color:var(--paper-muted);} .slide--meme .eyebrow::before{background:var(--paper-muted);}
+  .slide--meme h2.slide__title,.slide--meme h1.slide__title{color:var(--paper-ink);}
+  .slide--meme .body p,.slide--meme .lead{color:#463f2f;}
+  .slide--meme .callout{color:var(--paper-ink);border-color:var(--paper-ink);}
+  .slide--meme .caption{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--paper-muted);margin-top:1.2em;}
+  .slide--meme ul.ticks li{color:#463f2f;} .slide--meme ul.ticks li::before{color:var(--paper-ink);}
+  .slide--meme .deadpan{
+    font-family:"Newsreader",serif;font-style:italic;font-size:clamp(1.05rem,2vw,1.35rem);
+    color:var(--paper-ink);margin-top:1.1em;max-width:52ch;
+  }
+
+  .meme{border:2px solid var(--paper-ink);border-radius:4px;background:#fff;overflow:hidden;box-shadow:6px 6px 0 rgba(22,19,9,.15);max-width:600px;}
+  .meme__cap{
+    font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.02em;
+    font-size:clamp(.9rem,1.9vw,1.22rem);line-height:1.15;color:var(--paper-ink);
+    padding:14px 18px;text-align:center;border-bottom:2px solid var(--paper-ink);
+  }
+  .meme__cap:last-child{border-bottom:none;border-top:2px solid var(--paper-ink);}
+  .meme__row{display:grid;grid-template-columns:1fr 1fr;}
+  .meme__panel{padding:20px 16px;display:flex;flex-direction:column;justify-content:center;gap:9px;min-height:138px;border-right:2px solid var(--paper-ink);}
+  .meme__panel:last-child{border-right:none;}
+  .meme__panel .face{font-size:2.3rem;line-height:1;}
+  .meme__panel .txt{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;font-size:.98rem;line-height:1.24;color:var(--paper-ink);}
+  .meme__panel--yay{background:#E7F6EC;}
+  .meme__panel--nay{background:#FBE7EC;}
+  .meme__panel--top{border-bottom:2px solid var(--paper-ink);border-right:none;}
+  .meme--stack .meme__panel{border-right:none;border-bottom:2px solid var(--paper-ink);flex-direction:row;align-items:center;}
+  .meme--stack .meme__panel:last-child{border-bottom:none;}
+  .meme__brain{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:2px solid var(--paper-ink);}
+  .meme__brain:last-child{border-bottom:none;}
+  .meme__brain .lvl{font-size:1.8rem;line-height:1;}
+  .meme__brain .say{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;font-size:.98rem;color:var(--paper-ink);}
+  .meme__brain--1{background:#fff;} .meme__brain--2{background:#F4F1E6;} .meme__brain--3{background:#EAF7EF;} .meme__brain--4{background:#E7E2FF;}
+  .meme__chat{padding:18px;display:flex;flex-direction:column;gap:10px;background:#fff;}
+  .bub{max-width:82%;padding:11px 15px;border-radius:16px;font-family:"Space Grotesk",system-ui,sans-serif;font-weight:500;font-size:.96rem;line-height:1.3;}
+  .bub--them{align-self:flex-start;background:#EFEDE6;color:var(--paper-ink);border-bottom-left-radius:4px;}
+  .bub--me{align-self:flex-end;background:#2F6BFF;color:#fff;border-bottom-right-radius:4px;}
+  .bub small{display:block;font-weight:400;opacity:.7;font-size:.78em;margin-top:2px;}
+  .meme__pov{padding:0;background:#fff;}
+  .meme__pov .hd{background:var(--paper-ink);color:#fff;font-family:"JetBrains Mono",monospace;font-size:12px;letter-spacing:.14em;padding:10px 16px;text-transform:uppercase;}
+  .meme__pov .bd{padding:20px 18px;font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;font-size:1.05rem;line-height:1.3;color:var(--paper-ink);}
+
+  /* ================= CLOSE ================= */
+  .endcard .big{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:700;font-size:clamp(2rem,5.2vw,3.9rem);letter-spacing:-0.024em;line-height:1.03;margin:0 0 .35em;text-wrap:balance;}
+
+  @media (max-width:560px){
+    body{font-size:16px;}
+    .meme__row{grid-template-columns:1fr;}
+    .meme__panel{border-right:none;border-bottom:2px solid var(--paper-ink);}
+    .meme__panel:last-child{border-bottom:none;}
+    .hud__count{display:none;}
+  }
+</style>
+
+<div class="rail"><div class="rail__fill" id="railFill"></div></div>
+<button class="themebtn" id="themeBtn" aria-label="Toggle color theme">◐ Theme</button>
+<div class="hud">
+  <span class="hud__count">SLIDE <b id="hudNow">01</b> / <span id="hudTotal">40</span></span>
+  <span class="hud__btns"><button id="prevBtn" aria-label="Previous slide">↑</button><button id="nextBtn" aria-label="Next slide">↓</button></span>
+</div>
+
+<main class="deck" id="deck">
+
+  <!-- 01 · TITLE -->
+  <section class="slide slide--title" data-title="Title">
+    <canvas id="hero-canvas" aria-hidden="true"></canvas>
+    <div class="slide__inner">
+      <div class="titlecard">
+        <p class="kicker">IEEE SMC · MIT Bengaluru · Technical Symposium</p>
+        <h1>The Pattern Machine</h1>
+        <p class="sub">Your life and your city are running on loops you didn't write. Let's read the code — then ship the agent.</p>
+        <div class="body">
+          <p><span class="kw">Every stable pattern is an empty slot where an agent can live.</span> Your 2 a.m. scroll. The surge price at 6 p.m. The bin you forget every Tuesday. This talk is about seeing those loops — and learning the one move that turns any of them into an agent.</p>
+        </div>
+        <div class="meta">
+          <span><b>Exploring Pattern Recognition in Speed AI</b></span>
+          <span>Engineering the Agentic Future</span>
+          <span>5 SEP 2026 · AB5–308</span>
+          <span>40 slides · then you build one</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 · MEME — nobody / 2am -->
+  <section class="slide slide--meme" data-title="Cold open">
+    <div class="slide__inner">
+      <p class="eyebrow">Cold open</p>
+      <h2 class="slide__title">A pattern you know intimately</h2>
+      <div class="grid2-1">
+        <div class="meme meme--stack">
+          <div class="meme__panel"><span style="font-size:1.4rem;">🌒</span><span class="txt">Nobody:</span></div>
+          <div class="meme__panel"><span style="font-size:1.4rem;">🌌</span><span class="txt">Absolutely nobody:</span></div>
+          <div class="meme__panel meme__panel--nay"><span class="face">📱👁️👄👁️</span><span class="txt">My thumb, 2:47 AM: "last reel, then I sleep fr"</span></div>
+        </div>
+        <div>
+          <p class="deadpan">Funny because it's predictable. Same trigger, same routine, same reward, same 8 a.m. regret.</p>
+          <p class="caption">And predictable = programmable.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 · STAT SLIDE -->
+  <section class="slide" data-title="The numbers">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--hot">The numbers that sting a little</p>
+      <h2 class="slide__title">You already live inside pattern machines</h2>
+      <div class="statgrid">
+        <div class="stat"><div class="n hot">7 hrs</div><div class="l">Average daily screen time. Mostly autopilot, mostly unnoticed.</div></div>
+        <div class="stat"><div class="n">3 sec</div><div class="l">Typical gap between "lock phone" and "unlock it again."</div></div>
+        <div class="stat"><div class="n city">1.4×</div><div class="l">Peak-hour surge multiplier your ride app quietly decided on.</div></div>
+      </div>
+      <p class="callout callout--hot">None of this is a moral failure. It's <strong>un-owned patterns</strong> — and someone already built agents for them. The feed. The pricing engine. The notification scheduler.</p>
+    </div>
+  </section>
+
+  <!-- 04 · REFRAME — taker vs maker -->
+  <section class="slide" data-title="Two kinds of people">
+    <div class="slide__inner">
+      <p class="eyebrow">The reframe</p>
+      <h2 class="slide__title">Two kinds of people in an agentic world</h2>
+      <div class="grid2">
+        <div class="card card--hot">
+          <span class="emoji">🎣</span>
+          <span class="tag">Pattern-taker</span>
+          <h3>Lives inside agents other people built</h3>
+          <p>The feed picks your evening. Autoplay picks the next one. Surge picks your budget. Your patterns are someone's KPI.</p>
+        </div>
+        <div class="card card--accent">
+          <span class="emoji">🛠️</span>
+          <span class="tag">Pattern-maker</span>
+          <h3>Spots their own loops and builds agents for them</h3>
+          <p>Reads "I always miss the recycling truck" as a spec. Wraps it in <span class="mono">perceive → decide → act</span>. Now the loop works <em>for</em> them.</p>
+        </div>
+      </div>
+      <p class="callout">This lecture is a 40-minute conversion from the left card to the right one.</p>
+    </div>
+  </section>
+
+  <!-- 05 · AGENDA -->
+  <section class="slide" data-title="Agenda">
+    <div class="slide__inner">
+      <p class="eyebrow">The route</p>
+      <h2 class="slide__title">Five acts</h2>
+      <div class="grid3">
+        <div class="card"><span class="tag">Act I</span><h3>See the loop</h3><p>Trigger → routine → reward. Spot it in your phone, your week, your street.</p></div>
+        <div class="card"><span class="tag">Act II</span><h3>The one move</h3><p>Pattern + senses + a brain + hands + a loop = agent. Not model training.</p></div>
+        <div class="card"><span class="tag">Act III</span><h3>Gallery: your life</h3><p>Five personal agents, built as blocks. Pick one to steal.</p></div>
+        <div class="card card--city"><span class="tag">Act IV</span><h3>Gallery: your city</h3><p>Surge, signals, crowds, grids — patterns at a million-person scale.</p></div>
+        <div class="card card--non"><span class="tag">Act V</span><h3>Deterministic × not</h3><p>The rails vs the judgment. Why every real agent is a hybrid.</p></div>
+        <div class="card card--accent"><span class="tag">Then</span><h3>You build one</h3><p>Smallest possible life-agent, shipped before you leave.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 · ACT I -->
+  <section class="slide slide--statement" data-title="Act I">
+    <span class="footer-note">Act I — See the loop</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Act I</p>
+      <p class="statement">A <span class="hl">pattern</span> is any regularity stable enough to predict — and act on before it happens.</p>
+      <p class="attrib">Trigger → routine → reward. Learn to see this shape everywhere.</p>
+    </div>
+  </section>
+
+  <!-- 07 · the 4 beats -->
+  <section class="slide" data-title="Four beats">
+    <div class="slide__inner">
+      <p class="eyebrow">Act I · The shape</p>
+      <h2 class="slide__title">Every app you love runs the same four beats</h2>
+      <div class="loopflow">
+        <div class="node"><span class="k">Beat 1</span><span class="v">Trigger</span><span class="d">Bored, anxious, lonely — or a buzz, a badge, a red dot.</span></div>
+        <div class="node"><span class="k">Beat 2</span><span class="v">Action</span><span class="d">Smallest possible move. Unlock, swipe, tap. Zero friction.</span></div>
+        <div class="node"><span class="k">Beat 3</span><span class="v">Variable reward</span><span class="d">Sometimes gold, sometimes nothing. The randomness is the hook.</span></div>
+        <div class="node"><span class="k">Beat 4</span><span class="v">Investment</span><span class="d">A like, a streak, a follow — you load your own next trigger.</span></div>
+      </div>
+      <p class="callout callout--hot">Same four beats can point at a gym, a savings pot, a language app. Same machine — you just choose the target.</p>
+    </div>
+  </section>
+
+  <!-- 08 · spot your own — block grid -->
+  <section class="slide" data-title="Name one">
+    <div class="slide__inner">
+      <p class="eyebrow">Act I · Your turn — 10 seconds</p>
+      <h2 class="slide__title">Name one loop you're in right now</h2>
+      <div class="grid3">
+        <div class="card"><span class="emoji">🌙</span><span class="tag">Attention</span><h3>The 2 a.m. scroll</h3></div>
+        <div class="card"><span class="emoji">🛒</span><span class="tag">Money</span><h3>The 11 p.m. cart</h3></div>
+        <div class="card"><span class="emoji">📑</span><span class="tag">Focus</span><h3>The 9-tab explosion</h3></div>
+        <div class="card"><span class="emoji">😴</span><span class="tag">Sleep</span><h3>Revenge bedtime</h3></div>
+        <div class="card"><span class="emoji">💬</span><span class="tag">Social</span><h3>"I'll reply properly later"</h3></div>
+        <div class="card"><span class="emoji">🗑️</span><span class="tag">Life admin</span><h3>The forgotten bin day</h3></div>
+      </div>
+      <p class="callout">Pick the one that stings. That's your project for the hands-on.</p>
+    </div>
+  </section>
+
+  <!-- 09 · MEME — expectation vs reality -->
+  <section class="slide slide--meme" data-title="Meme · exp vs reality">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act I</p>
+      <h2 class="slide__title">Willpower is not a pattern. It's the weather.</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__cap">Sunday night: "new week, new me"</div>
+          <div class="meme__row">
+            <div class="meme__panel meme__panel--top meme__panel--yay"><div class="face">🔥📅💪</div><div class="txt">EXPECTATION: 6 AM, 5 days, meal-prepped, glowing</div></div>
+          </div>
+          <div class="meme__row" style="grid-template-columns:1fr;">
+            <div class="meme__panel meme__panel--nay" style="border-right:none;"><div class="face">😴🌧️📱</div><div class="txt">REALITY: Tuesday, raining, "rest week starts today"</div></div>
+          </div>
+        </div>
+        <div>
+          <p class="deadpan">Motivation arrives on a distribution — rarely at 6 a.m. on a cold Tuesday.</p>
+          <p class="caption">Don't feel more motivated. Build the thing that doesn't need you to.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 · det vs non-det patterns IN YOU -->
+  <section class="slide" data-title="Clockwork or dice">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act I · The distinction that runs through the whole talk</p>
+      <h2 class="slide__title">Some of your patterns are clockwork. Some are a dice roll.</h2>
+      <div class="grid2">
+        <div class="card card--det">
+          <span class="emoji">⏰</span><span class="tag">Deterministic</span>
+          <h3>Same every time</h3>
+          <p>Alarm at 07:00. Coffee before words. Rent on the 1st. Predict with a <span class="mono">rule</span>.</p>
+        </div>
+        <div class="card card--non">
+          <span class="emoji">🎲</span><span class="tag">Non-deterministic</span>
+          <h3>A distribution</h3>
+          <p>Whether you train. What you eat when stressed. Your reply speed. Predict with a <span class="mono">probability</span>.</p>
+        </div>
+      </div>
+      <p class="callout callout--non">Great agents: <span class="kw--det">deterministic parts</span> for the rails, a <span class="kw--non">non-deterministic part</span> for the judgment. Hold that.</p>
+    </div>
+  </section>
+
+  <!-- 11 · MEME — two buttons -->
+  <section class="slide slide--meme" data-title="Meme · two buttons">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act I</p>
+      <h2 class="slide__title">Every self-improvement decision, ever</h2>
+      <div class="grid2-1">
+        <div class="meme meme--stack">
+          <div class="meme__panel"><span style="font-size:1.5rem;">🔴</span><span class="txt">Rely on future-me having more discipline than present-me has ever had</span></div>
+          <div class="meme__panel"><span style="font-size:1.5rem;">🔴</span><span class="txt">Spend one afternoon building a system so future-me doesn't decide</span></div>
+          <div class="meme__panel meme__panel--nay"><span class="face">😰</span><span class="txt">Us, every Jan 1, sweating, pressing the first one</span></div>
+        </div>
+        <div>
+          <p class="deadpan">Agentic thinking in one line: move the decision out of the hard moment and into a calm afternoon.</p>
+          <p class="caption">You're not lazy. You're doing by hand a thing that wants to be an agent.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 · ACT II -->
+  <section class="slide slide--statement" data-title="Act II">
+    <span class="footer-note">Act II — The one move</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Act II</p>
+      <p class="statement">Pattern <span class="hl">+ senses + a brain + hands + a loop</span> = agent.</p>
+      <p class="attrib">That's it. No GPU. No model training. Mostly plumbing.</p>
+    </div>
+  </section>
+
+  <!-- 13 · the recipe block -->
+  <section class="slide" data-title="The recipe">
+    <div class="slide__inner">
+      <p class="eyebrow">Act II · The recipe</p>
+      <h2 class="slide__title">Four things you bolt onto a pattern</h2>
+      <div class="grid4 grid4--keep2">
+        <div class="card card--accent"><span class="emoji">👀</span><span class="tag">+ senses</span><h3>Perceive</h3><p>Read the signals you already generate.</p></div>
+        <div class="card card--accent"><span class="emoji">🧠</span><span class="tag">+ a brain</span><h3>Decide</h3><p>Given context, pick one useful move — or none.</p></div>
+        <div class="card card--accent"><span class="emoji">✋</span><span class="tag">+ hands</span><h3>Act</h3><p>A few small, well-labelled tools. Nothing else.</p></div>
+        <div class="card card--accent"><span class="emoji">🔁</span><span class="tag">+ a loop</span><h3>Learn</h3><p>Did it work? Feed the outcome back.</p></div>
+      </div>
+      <p class="callout">The "brain" is one model call. The other three are code you could write today.</p>
+    </div>
+  </section>
+
+  <!-- 14 · perceive-decide-act ribbon -->
+  <section class="slide" data-title="The loop">
+    <div class="slide__inner">
+      <p class="eyebrow">Act II · The shape of every agent</p>
+      <h2 class="slide__title">Perceive → decide → act → observe → repeat</h2>
+      <div class="loopflow">
+        <div class="node"><span class="k">01</span><span class="v">Perceive</span><span class="d">Read state: sensors, calendar, the last result.</span></div>
+        <div class="node"><span class="k">02</span><span class="v">Decide</span><span class="d">Pick the next action. Rule, or model call.</span></div>
+        <div class="node"><span class="k">03</span><span class="v">Act</span><span class="d">Fire a tool. The world changed.</span></div>
+        <div class="node"><span class="k">04</span><span class="v">Observe</span><span class="d">Take in the result. Win? Error? New info?</span></div>
+        <div class="node"><span class="k">05</span><span class="v">Check</span><span class="d">Done — or loop with what you now know.</span></div>
+      </div>
+      <p class="callout callout--non">A thermostat, a chess engine, a coding assistant, a traffic light: all run this. What differs is <span class="kw--non">how "decide" works</span> and <span class="kw--det">how tightly the loop is scripted</span>.</p>
+    </div>
+  </section>
+
+  <!-- 15 · why a model in the decide step -->
+  <section class="slide" data-title="Why a model">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act II · The detailed reason</p>
+      <h2 class="slide__title">Why the "decide" step is a model, not an <span class="mono">if</span></h2>
+      <div class="grid2">
+        <div class="card card--det">
+          <span class="tag">Rules work when…</span>
+          <h3>Every case was foreseen</h3>
+          <p><span class="mono">if days_since &gt; 3: nudge()</span>. Fine for a week. Then you tune it out — a generic nag isn't a pattern-break, it's noise.</p>
+        </div>
+        <div class="card card--non">
+          <span class="tag">A model works when…</span>
+          <h3>The case wasn't foreseen</h3>
+          <p>It's seen millions of traces of people planning, nudging, recovering. It produces a plausible next move for situations <em>nobody enumerated</em>.</p>
+        </div>
+      </div>
+      <ul class="ticks ticks--non">
+        <li><strong>Generalization</strong> — handles the unseen Tuesday the way a classifier handles an unseen photo.</li>
+        <li><strong>Language is the interface</strong> — goals, context, tool calls are all just text it continues.</li>
+        <li><strong>Steer with examples</strong>, not a retrain. Change the prompt, change the behavior.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 16 · MEME — this is fine, the loop -->
+  <section class="slide slide--meme" data-title="Meme · this is fine">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act II</p>
+      <h2 class="slide__title">A loop with no stopping condition</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__cap">Autonomous agent, iteration 47</div>
+          <div class="meme__row">
+            <div class="meme__panel meme__panel--nay"><div class="face">🐕☕🔥</div><div class="txt">"I'll just retry the same failing call one more time"</div></div>
+            <div class="meme__panel meme__panel--nay"><div class="face">🔥🔥🔥</div><div class="txt">"This is fine. Making progress. $840 in tokens."</div></div>
+          </div>
+          <div class="meme__cap">no max-steps. no budget. no human.</div>
+        </div>
+        <div>
+          <p class="deadpan">The loop is the power and the danger. Unbounded iteration turns a small bug into a runaway bill.</p>
+          <ul class="ticks">
+            <li>Hard step / time / token ceiling</li>
+            <li>Loop &amp; repeat detection</li>
+            <li>Reversible actions, or ask a human</li>
+            <li>A "give up and ask" branch</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 · ACT III -->
+  <section class="slide slide--statement" data-title="Act III">
+    <span class="footer-note">Act III — Gallery: your life</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Act III</p>
+      <p class="statement">Same recipe. <span class="hl">Different pattern.</span> Five agents you could ship this month.</p>
+      <p class="attrib">Blocks, not essays. Steal one.</p>
+    </div>
+  </section>
+
+  <!-- 18 · gallery overview -->
+  <section class="slide" data-title="Life gallery">
+    <div class="slide__inner">
+      <p class="eyebrow">Act III · The catalogue</p>
+      <h2 class="slide__title">Your life, as five bounded loops</h2>
+      <div class="grid3">
+        <div class="card card--accent"><span class="emoji">😴</span><span class="tag">Agent 01</span><h3>Wind-Down</h3><p>Screen-time after 22:00 → dims the room, hides the feed, queues quiet.</p></div>
+        <div class="card card--accent"><span class="emoji">🛒</span><span class="tag">Agent 02</span><h3>Sleep-On-It</h3><p>Late-night cart over ₹2k → 12-hour hold before it lets you check out.</p></div>
+        <div class="card card--accent"><span class="emoji">🎂</span><span class="tag">Agent 03</span><h3>Never-Forget</h3><p>Contact's birthday in 3 days → drafts the message + a gift link.</p></div>
+        <div class="card card--accent"><span class="emoji">📥</span><span class="tag">Agent 04</span><h3>Reply-Draft</h3><p>Text unread 18h from someone you care about → writes the reply, you hit send.</p></div>
+        <div class="card card--accent"><span class="emoji">🌱</span><span class="tag">Agent 05</span><h3>Keep-Alive</h3><p>No "watered" log + dry forecast → one nudge, with the plant's name.</p></div>
+        <div class="card card--hot"><span class="emoji">🕳️</span><span class="tag">Anti-pattern</span><h3>The Everything Agent</h3><p>One agent for your whole life. Don't. Five small loops &gt; one god-object.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 19 · deep dive — Wind-Down agent (blocks) -->
+  <section class="slide" data-title="Wind-Down build">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--accent">Build 01 · Wind-Down Agent</p>
+      <h2 class="slide__title">The 2 a.m. scroll, as an agent</h2>
+      <div class="archdiag">
+        <div class="archrow">
+          <div class="block"><span class="bt">Senses</span><span class="bn">screen-time by hour</span></div>
+          <div class="block"><span class="bt">Senses</span><span class="bn">tomorrow's 1st alarm</span></div>
+          <div class="block"><span class="bt">Senses</span><span class="bn">current app in use</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--core"><span class="bt">Brain (model)</span><span class="bn">"90 min past 22:00 + 6:30 alarm → pick the softest effective interruption"</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block"><span class="bt">Hands</span><span class="bn">dim_lights()</span></div>
+          <div class="block"><span class="bt">Hands</span><span class="bn">grayscale_screen()</span></div>
+          <div class="block"><span class="bt">Hands</span><span class="bn">hide_feed(30min)</span></div>
+          <div class="block"><span class="bt">Hands</span><span class="bn">play("rain")</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--det"><span class="bt">Rail</span><span class="bn">never fully locks the phone · always one-tap "not tonight"</span></div>
+        </div>
+      </div>
+      <p class="callout">Week 1 it guesses. Week 6 it knows grayscale + rain works on you and the lecture-y notification doesn't.</p>
+    </div>
+  </section>
+
+  <!-- 20 · MEME — iMessage from the agent -->
+  <section class="slide slide--meme" data-title="Meme · agent text">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act III</p>
+      <h2 class="slide__title">Day 40 with a life-agent</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__chat">
+            <div class="bub bub--them">it's 23:40, you've got the 7am standup, and you've rewatched the same 3 reels. screen's grey now. rain's on. <small>Wind-Down · 23:40</small></div>
+            <div class="bub bub--me">rude but ok <small>23:41</small></div>
+            <div class="bub bub--them">that's 5 nights this week under 15 min of doomscroll. your feed misses you <small>23:41</small></div>
+          </div>
+        </div>
+        <div>
+          <p class="deadpan">It didn't add willpower. It removed the moment where willpower was needed.</p>
+          <p class="caption">Same trick works for spending, replies, chores, study.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 21 · Never-Forget agent (blocks + snippet) -->
+  <section class="slide" data-title="Never-Forget build">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--accent">Build 02 · Never-Forget Agent</p>
+      <h2 class="slide__title">"You always forget Mom's birthday" — solved in 20 lines</h2>
+      <div class="grid2">
+        <div class="body">
+          <ul class="ticks">
+            <li><strong>Sense:</strong> contacts + a "close people" list you set once.</li>
+            <li><strong>Brain:</strong> given the person and your past messages to them, draft something that sounds like <em>you</em>, not a card.</li>
+            <li><strong>Hands:</strong> <span class="mono">draft_message()</span>, <span class="mono">suggest_gift(budget)</span>, <span class="mono">add_calendar_reminder()</span>.</li>
+            <li><strong>Rail:</strong> never sends automatically. It stages; you approve.</li>
+          </ul>
+          <p class="callout callout--det">The one irreversible act — hitting send to a human — stays with you. Always.</p>
+        </div>
+        <div>
+          <pre class="snippet"><span class="c"># the whole agent, basically</span>
+for p in close_people:
+    if <span class="g">days_until(p.birthday)</span> == <span class="o">3</span>:
+        draft = <span class="v">llm</span>(
+          <span class="g">"Write a warm birthday text in MY voice"</span>,
+          history = messages_with(p),
+          person  = p,
+        )
+        gift = <span class="v">llm</span>(<span class="g">"3 gift ideas"</span>, person=p, budget=<span class="o">1500</span>)
+        <span class="c"># stage for approval — never auto-send</span>
+        inbox.stage(draft, gift)</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 22 · MEME — POV, life admin -->
+  <section class="slide slide--meme" data-title="Meme · POV">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act III</p>
+      <h2 class="slide__title">Life admin, before and after</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__pov">
+            <div class="hd">POV: it's 08:12 on a Tuesday</div>
+            <div class="bd">🚛💨 the recycling truck pulls away.<br>your bin: still in the kitchen.<br>next pickup: in 14 days.<br>you: "I'll remember next time" (you will not)</div>
+          </div>
+          <div class="meme__cap">this exact scene has 2 billion reruns worldwide</div>
+        </div>
+        <div>
+          <p class="deadpan">A Bin Agent is embarrassingly simple: a council calendar feed, a Sunday-night nudge, one rail — "max one reminder."</p>
+          <p class="caption">Boring agents are the ones that actually change your life.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 23 · gallery recap / pick one -->
+  <section class="slide" data-title="Pick one">
+    <div class="slide__inner">
+      <p class="eyebrow">Act III · Takeaway</p>
+      <h2 class="slide__title">The pattern behind all five</h2>
+      <div class="grid3">
+        <div class="card"><span class="tag">1</span><h3>One sensor you already have</h3><p>Screen-time export, a calendar feed, a manual check-in.</p></div>
+        <div class="card"><span class="tag">2</span><h3>One tool</h3><p>Usually just "send me a message." That's a complete agent.</p></div>
+        <div class="card"><span class="tag">3</span><h3>One rail</h3><p>"Once a day." "Never auto-send." "Nothing over ₹500."</p></div>
+      </div>
+      <p class="callout">You don't need five. You need <strong>one, tonight.</strong></p>
+    </div>
+  </section>
+
+  <!-- 24 · ACT IV -->
+  <section class="slide slide--statement" data-title="Act IV">
+    <span class="footer-note">Act IV — Gallery: your city</span>
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--city">Act IV</p>
+      <p class="statement">Zoom out. The <span class="hlc">same loop</span> runs a city of ten million people — and the agents are already deployed.</p>
+      <p class="attrib">You ride them every day. Now you'll see them.</p>
+    </div>
+  </section>
+
+  <!-- 25 · surge pricing -->
+  <section class="slide" data-title="Surge pricing">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--city">City agent 01 · Surge pricing</p>
+      <h2 class="slide__title">The price that reads the crowd</h2>
+      <div class="archdiag">
+        <div class="archrow">
+          <div class="block"><span class="bt">Pattern</span><span class="bn">demand spikes at predictable times &amp; places (rain, concert-out, 6pm)</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block"><span class="bt">Senses</span><span class="bn">open app sessions</span></div>
+          <div class="block"><span class="bt">Senses</span><span class="bn">nearby driver count</span></div>
+          <div class="block"><span class="bt">Senses</span><span class="bn">weather · events · time</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--core"><span class="bt">Decide (non-deterministic)</span><span class="bn">set a multiplier that pulls just enough drivers in without killing demand</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--det"><span class="bt">Rails (deterministic)</span><span class="bn">hard cap on multiplier · frozen during declared emergencies · shown before you book</span></div>
+        </div>
+      </div>
+      <p class="callout callout--city">A perceive → decide → act loop, running per-neighbourhood, every few seconds. You've been inside this agent's decision hundreds of times.</p>
+    </div>
+  </section>
+
+  <!-- 26 · MEME — surge -->
+  <section class="slide slide--meme" data-title="Meme · surge">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act IV</p>
+      <h2 class="slide__title">The agent, from the back seat</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__row">
+            <div class="meme__panel meme__panel--nay"><div class="face">🌧️😭</div><div class="txt">"it started drizzling"</div></div>
+            <div class="meme__panel meme__panel--nay"><div class="face">💸📈</div><div class="txt">the app, instantly: "2.3× — surge in your area"</div></div>
+          </div>
+          <div class="meme__cap">it didn't panic. it ran the loop.</div>
+        </div>
+        <div>
+          <p class="deadpan">You feel personally attacked. It's just a pricing agent reading a demand pattern and pulling a lever.</p>
+          <p class="caption">Understanding the loop &gt; being surprised by it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 27 · traffic signals -->
+  <section class="slide" data-title="Traffic signals">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--city">City agent 02 · Adaptive traffic signals</p>
+      <h2 class="slide__title">Green lights that watch the queue</h2>
+      <div class="grid2">
+        <div class="body">
+          <ul class="ticks ticks--city">
+            <li><strong>Pattern:</strong> traffic flow has strong daily &amp; weekly rhythm, plus shocks (a match, a crash).</li>
+            <li><strong>Senses:</strong> inductive loops in the road, cameras, connected-vehicle pings.</li>
+            <li><strong>Decide:</strong> extend this green, hold that red, offset the next junction so a "green wave" forms.</li>
+            <li><strong>Rails:</strong> minimum green time, pedestrian phases guaranteed, emergency-vehicle pre-emption overrides everything.</li>
+          </ul>
+        </div>
+        <div class="card card--city">
+          <span class="tag">Why it's an agent, not a timer</span>
+          <h3>It observes, then adapts</h3>
+          <p>A fixed-timer light is deterministic and dumb. An adaptive corridor perceives the real queue and re-plans every cycle — a loop, at a junction, all day.</p>
+        </div>
+      </div>
+      <p class="callout callout--city">Cities running these report meaningfully shorter trip times on managed corridors — the loop, paying rent.</p>
+    </div>
+  </section>
+
+  <!-- 28 · crowd flow -->
+  <section class="slide" data-title="Crowd flow">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--city">City agent 03 · Crowd &amp; transit flow</p>
+      <h2 class="slide__title">Moving a stadium without a stampede</h2>
+      <div class="grid3">
+        <div class="card"><span class="emoji">📡</span><span class="tag">Sense</span><h3>Density</h3><p>Phone-network heatmaps, gate counts, platform CCTV occupancy.</p></div>
+        <div class="card"><span class="emoji">🧠</span><span class="tag">Decide</span><h3>Meter &amp; reroute</h3><p>Hold this gate, open that exit, delay a train 90s to spread the surge.</p></div>
+        <div class="card"><span class="tag">Rail</span><span class="emoji">🛑</span><h3>Safety floors</h3><p>Density thresholds that trigger humans, not just the model. Never optimize past them.</p></div>
+      </div>
+      <p class="callout callout--city">Same five parts as your Wind-Down agent. Just… 60,000 people instead of one sleepy student.</p>
+    </div>
+  </section>
+
+  <!-- 29 · energy grid -->
+  <section class="slide" data-title="Energy grid">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--city">City agent 04 · Grid demand-response</p>
+      <h2 class="slide__title">The loop that keeps the lights on</h2>
+      <div class="archdiag">
+        <div class="archrow">
+          <div class="block"><span class="bt">Pattern</span><span class="bn">demand peaks are forecastable; supply from solar/wind is not</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block"><span class="bt">Sense</span><span class="bn">live load</span></div>
+          <div class="block"><span class="bt">Sense</span><span class="bn">weather → renewables</span></div>
+          <div class="block"><span class="bt">Sense</span><span class="bn">price · reserves</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--core"><span class="bt">Decide</span><span class="bn">pre-cool buildings, shift EV charging, page flexible factories — before the peak</span></div>
+        </div>
+        <div class="archrow">
+          <div class="block block--det"><span class="bt">Rails</span><span class="bn">hospitals &amp; critical loads never curtailed · frequency limits are hard law</span></div>
+        </div>
+      </div>
+      <p class="callout callout--det">Deterministic where being wrong means a blackout. Non-deterministic where it means a slightly warmer office.</p>
+    </div>
+  </section>
+
+  <!-- 30 · MEME — galaxy brain, city -->
+  <section class="slide slide--meme" data-title="Meme · city galaxy brain">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act IV</p>
+      <h2 class="slide__title">Seeing your city</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__brain meme__brain--1"><span class="lvl">🧠</span><span class="say">"the light turned green because it's my turn"</span></div>
+          <div class="meme__brain meme__brain--2"><span class="lvl">💡</span><span class="say">"the light is on a timer"</span></div>
+          <div class="meme__brain meme__brain--3"><span class="lvl">✨</span><span class="say">"the light sensed my lane's queue and re-planned the corridor"</span></div>
+          <div class="meme__brain meme__brain--4"><span class="lvl">🌌</span><span class="say">"I live inside a few thousand perceive→decide→act loops and now I can name them"</span></div>
+        </div>
+        <div>
+          <p class="deadpan">Same idea at every scale: spot the regularity, act on it before it acts on you.</p>
+          <p class="caption">The perceptron did it for pixels. The grid does it for gigawatts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 31 · ACT V -->
+  <section class="slide slide--statement" data-title="Act V">
+    <span class="footer-note">Act V — Deterministic × non-deterministic</span>
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act V</p>
+      <p class="statement"><span class="hld">Deterministic:</span> same input, same output.<br><span class="hln">Non-deterministic:</span> same input, a <em>distribution</em>.</p>
+      <p class="attrib">Neither is better. They fail differently. They belong in different places.</p>
+    </div>
+  </section>
+
+  <!-- 32 · the compare table -->
+  <section class="slide" data-title="Compared">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act V · Side by side</p>
+      <h2 class="slide__title">Two ways a system can behave</h2>
+      <div class="compare">
+        <div class="h rowlabel"> </div>
+        <div class="h det">Deterministic</div>
+        <div class="h non">Non-deterministic</div>
+
+        <div class="rowlabel">Behavior</div>
+        <div class="c">Fixed path. Reproducible bit-for-bit.</div>
+        <div class="c">Sampled from a probability distribution.</div>
+
+        <div class="rowlabel">Built from</div>
+        <div class="c">Rules, lookups, typed functions.</div>
+        <div class="c">A learned model; search with randomness.</div>
+
+        <div class="rowlabel">Superpower</div>
+        <div class="c">Auditable. Testable. Zero-error tolerance.</div>
+        <div class="c">Handles the unforeseen &amp; the ambiguous.</div>
+
+        <div class="rowlabel">Failure mode</div>
+        <div class="c">Silent gap — the case no one wrote a rule for.</div>
+        <div class="c">Confident wrongness — plausible but false.</div>
+
+        <div class="rowlabel">Test with</div>
+        <div class="c">Unit tests. Exact equality.</div>
+        <div class="c">Evals. Sampling. Acceptance thresholds.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 33 · where determinism belongs -->
+  <section class="slide" data-title="Keep det">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act V · Placement</p>
+      <h2 class="slide__title">Keep these <span class="kw--det">deterministic</span>. Always.</h2>
+      <div class="grid3">
+        <div class="card card--det"><span class="emoji">💸</span><h3>Money movement</h3></div>
+        <div class="card card--det"><span class="emoji">🔐</span><h3>Access &amp; permissions</h3></div>
+        <div class="card card--det"><span class="emoji">⛔</span><h3>The agent's budget &amp; kill-switch</h3></div>
+        <div class="card card--det"><span class="emoji">🧾</span><h3>Anything an audit will replay</h3></div>
+        <div class="card card--det"><span class="emoji">✅</span><h3>Tool-argument &amp; schema checks</h3></div>
+        <div class="card card--det"><span class="emoji">🚑</span><h3>Safety floors (density, frequency, dosage)</h3></div>
+      </div>
+      <p class="callout callout--det">If being wrong is expensive <em>and</em> the right answer is knowable up front — it must not be guessing.</p>
+    </div>
+  </section>
+
+  <!-- 34 · where non-det earns its place -->
+  <section class="slide" data-title="Let non-det">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act V · Placement</p>
+      <h2 class="slide__title">Let these be <span class="kw--non">non-deterministic</span>. On purpose.</h2>
+      <div class="grid3">
+        <div class="card card--non"><span class="emoji">🗣️</span><h3>Understanding a free-text ask</h3></div>
+        <div class="card card--non"><span class="emoji">🧩</span><h3>Planning steps for a novel task</h3></div>
+        <div class="card card--non"><span class="emoji">✍️</span><h3>Drafting — text, code, replies</h3></div>
+        <div class="card card--non"><span class="emoji">🔧</span><h3>Choosing which tool fits</h3></div>
+        <div class="card card--non"><span class="emoji">📊</span><h3>Judging relevance &amp; ranking</h3></div>
+        <div class="card card--non"><span class="emoji">🩹</span><h3>Recovering from a weird error</h3></div>
+      </div>
+      <p class="callout callout--non">You're not tolerating the randomness — you're buying the generalization that comes with it.</p>
+    </div>
+  </section>
+
+  <!-- 35 · hybrid: soft core hard shell -->
+  <section class="slide" data-title="Soft core hard shell">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--non">Act V · The synthesis</p>
+      <h2 class="slide__title">Every real agent: soft core, hard shell</h2>
+      <div class="archdiag">
+        <div class="archrow"><div class="block block--det"><span class="bt">Hard shell · in</span><span class="bn">validate · authenticate · route · rate-limit</span></div></div>
+        <div class="archrow"><div class="block block--core"><span class="bt">Soft core</span><span class="bn">model reasons, plans, drafts, picks a tool</span></div></div>
+        <div class="archrow"><div class="block block--det"><span class="bt">Hard shell · every action</span><span class="bn">type-check args · permission-check · dry-run the reversible ones</span></div></div>
+        <div class="archrow"><div class="block block--det"><span class="bt">Hard shell · out</span><span class="bn">verify vs criteria · log · gate · (human sign-off on the irreversible)</span></div></div>
+      </div>
+      <p class="callout">The model <em>proposes</em>. Plain, tested code <em>disposes</em>. It can't hallucinate its way past the shell.</p>
+    </div>
+  </section>
+
+  <!-- 36 · MEME — drake, placement -->
+  <section class="slide slide--meme" data-title="Meme · Drake">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act V</p>
+      <h2 class="slide__title">Putting the layer where it belongs</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__cap">"Should the agent decide the payment amount?"</div>
+          <div class="meme__row">
+            <div class="meme__panel meme__panel--top meme__panel--nay"><div class="face">🙅</div><div class="txt">let the vibes-based language model freestyle a transfer, temp 0.8</div></div>
+          </div>
+          <div class="meme__row" style="grid-template-columns:1fr;">
+            <div class="meme__panel meme__panel--yay" style="border-right:none;"><div class="face">🙆</div><div class="txt">a 3-line function: capped, once-a-day, cancellable, logged</div></div>
+          </div>
+          <div class="meme__cap">flip it for "write something that gets me off the couch"</div>
+        </div>
+        <div>
+          <p class="deadpan">Maturity isn't "we use agents everywhere." It's being able to point at any component and say <em>why</em> it's deterministic or not.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 37 · design principles -->
+  <section class="slide" data-title="Principles">
+    <div class="slide__inner">
+      <p class="eyebrow">Act V · Build it well</p>
+      <h2 class="slide__title">Six rules that keep an agent trustworthy</h2>
+      <div class="grid3">
+        <div class="card card--accent"><span class="emoji">🔹</span><span class="tag">Simple</span><h3>Smallest loop that helps</h3><p>One sensor, one tool, one nudge. Add only when that plainly fails.</p></div>
+        <div class="card"><span class="emoji">🪟</span><span class="tag">Visible</span><h3>Show the "why now"</h3><p>Can't watch it think → can't trust it, and you'd be right.</p></div>
+        <div class="card card--det"><span class="emoji">🚧</span><span class="tag">Bounded</span><h3>Hard rails on anything costly</h3><p>Caps &amp; allow-lists in code, not prompt text.</p></div>
+        <div class="card"><span class="emoji">↩️</span><span class="tag">Reversible</span><h3>Every action has an undo</h3><p>Mute, snooze, cancel — in one tap.</p></div>
+        <div class="card"><span class="emoji">🧭</span><span class="tag">Consensual</span><h3>You're the principal</h3><p>Optimizes your stated goal. Stops when you say stop.</p></div>
+        <div class="card card--hot"><span class="emoji">💛</span><span class="tag">Kind</span><h3>Never nag</h3><p>A guilt-trip is a failed nudge. Be useful and warm, or do nothing.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 38 · MEME — chad pattern-maker -->
+  <section class="slide slide--meme" data-title="Meme · two paths">
+    <div class="slide__inner">
+      <p class="eyebrow">Checkpoint · Act V</p>
+      <h2 class="slide__title">Two ways to leave this room</h2>
+      <div class="grid2-1">
+        <div class="meme">
+          <div class="meme__row">
+            <div class="meme__panel meme__panel--nay"><div class="face">😩</div><div class="txt">"I'll just try harder next week"<br><span style="font-weight:400;font-size:.85em;">— every week since 2019</span></div></div>
+            <div class="meme__panel meme__panel--yay"><div class="face">🗿</div><div class="txt">"I mapped one loop and wired a 30-line agent to it tonight"</div></div>
+          </div>
+          <div class="meme__cap">be the second one. genuinely one evening.</div>
+        </div>
+        <div>
+          <p class="deadpan">No lab, no GPU, no research budget. One honest look at a pattern, an API key, a cron job.</p>
+          <p class="caption">Low bar. Compounding payoff.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 39 · hands-on -->
+  <section class="slide" data-title="Hands-on">
+    <div class="slide__inner">
+      <p class="eyebrow eyebrow--hot">Now you build one · next 60 minutes</p>
+      <h2 class="slide__title">Ship the smallest possible life-agent</h2>
+      <div class="grid2">
+        <div>
+          <p class="caption" style="color:var(--accent)">The brief</p>
+          <ul class="ticks">
+            <li><strong>Pick the pattern that stung</strong> in slide 8. One only.</li>
+            <li>Write its loop in one line: <span class="mono">trigger → routine → reward</span>.</li>
+            <li><strong>One sensor.</strong> Anything real — an export, a calendar, a check-in.</li>
+            <li><strong>One tool.</strong> "Send me a message" counts.</li>
+            <li><strong>One deterministic rail.</strong> "Max once a day."</li>
+            <li>Run <span class="mono">perceive → decide → act</span> once by hand. Then cron it.</li>
+          </ul>
+        </div>
+        <div>
+          <p class="caption" style="color:var(--muted)">Three sentences to leave with</p>
+          <ul class="ticks ticks--non">
+            <li>Every stable pattern is an empty slot where an agent can live.</li>
+            <li>An agent is a pattern in a loop, with senses and hands.</li>
+            <li>Soft core, hard shell — the model proposes, plain code disposes.</li>
+          </ul>
+          <p class="callout">Don't automate your whole life. Automate <em>one rainy Tuesday.</em></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 40 · CLOSE -->
+  <section class="slide" data-title="Close">
+    <div class="slide__inner endcard">
+      <p class="eyebrow">One line to take home</p>
+      <p class="big">Stop being the pattern.<br>Start building the agent.</p>
+      <div class="body" style="margin-top:12px;">
+        <p>Seventy years ago a machine learned to notice a shape it had never seen. Tonight you can build one that notices you're about to skip the gym, miss the bin, or overspend at midnight — and quietly moves the pieces so you don't.</p>
+        <p>Same lineage. Much shorter commute.</p>
+      </div>
+      <p class="attrib" style="margin-top:2.2em;">The Pattern Machine · Exploring Pattern Recognition in Speed AI · IEEE SMC, MIT Bengaluru · 5 Sep 2026</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var root = document.documentElement;
+  var themeBtn = document.getElementById('themeBtn');
+  function currentTheme(){
+    var t = root.getAttribute('data-theme');
+    if (t) return t;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  themeBtn.addEventListener('click', function(){
+    root.setAttribute('data-theme', currentTheme() === 'dark' ? 'light' : 'dark');
+  });
+
+  var deck = document.getElementById('deck');
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length;
+  document.getElementById('hudTotal').textContent = total;
+  var railFill = document.getElementById('railFill');
+  var hudNow = document.getElementById('hudNow');
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function pad(n){ return (n < 10 ? '0' : '') + n; }
+  function currentIndex(){
+    var h = window.innerHeight;
+    return Math.min(total - 1, Math.max(0, Math.round(deck.scrollTop / h)));
+  }
+  function update(){
+    var i = currentIndex();
+    hudNow.textContent = pad(i + 1);
+    railFill.style.height = (total > 1 ? (i / (total - 1)) * 100 : 0) + '%';
+  }
+  function go(i){
+    i = Math.min(total - 1, Math.max(0, i));
+    slides[i].scrollIntoView({behavior: reduce ? 'auto' : 'smooth', block: 'start'});
+  }
+
+  var ticking = false;
+  deck.addEventListener('scroll', function(){
+    if (!ticking){ window.requestAnimationFrame(function(){ update(); ticking = false; }); ticking = true; }
+  }, {passive:true});
+
+  document.getElementById('prevBtn').addEventListener('click', function(){ go(currentIndex() - 1); });
+  document.getElementById('nextBtn').addEventListener('click', function(){ go(currentIndex() + 1); });
+  window.addEventListener('keydown', function(e){
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    switch(e.key){
+      case 'ArrowDown': case 'PageDown': case ' ': case 'ArrowRight': e.preventDefault(); go(currentIndex() + 1); break;
+      case 'ArrowUp': case 'PageUp': case 'ArrowLeft': e.preventDefault(); go(currentIndex() - 1); break;
+      case 'Home': e.preventDefault(); go(0); break;
+      case 'End': e.preventDefault(); go(total - 1); break;
+    }
+  });
+  update();
+
+  /* hero canvas: scattered life/city event dots; a pattern boundary sweeps in, locks,
+     captured dots pulse — patterns becoming legible. */
+  var canvas = document.getElementById('hero-canvas');
+  if (canvas && canvas.getContext){
+    var ctx = canvas.getContext('2d');
+    var pts = [], W = 0, H = 0, dpr = Math.min(2, window.devicePixelRatio || 1);
+    var running = true, t0 = null;
+    function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+    function seed(){
+      pts = [];
+      var n = Math.max(70, Math.floor((W * H) / 12500));
+      for (var i = 0; i < n; i++) pts.push({ x: Math.random()*W, y: Math.random()*H, ph: Math.random()*Math.PI*2 });
+    }
+    function resize(){
+      var r = canvas.getBoundingClientRect();
+      W = r.width; H = r.height;
+      canvas.width = W*dpr; canvas.height = H*dpr;
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      seed();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    function frame(ts){
+      if (!running) return;
+      if (t0 === null) t0 = ts;
+      var t = (ts - t0)/1000;
+      var signal = css('--signal') || '#4BE39C';
+      var pulse  = css('--pulse')  || '#FF5C7A';
+      ctx.clearRect(0,0,W,H);
+      var osc = 0.5 + 0.5*Math.sin(t*0.5);
+      var lock = Math.min(1, t/5.5);
+      var frac = osc*(1-lock) + 0.6*lock;
+      var slope = -0.85;
+      var intercept = frac*(H*1.4) - H*0.2;
+      ctx.beginPath();
+      ctx.moveTo(0, intercept);
+      ctx.lineTo(W, slope*W + intercept);
+      ctx.strokeStyle = signal;
+      ctx.globalAlpha = 0.4 + 0.45*lock;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      for (var i = 0; i < pts.length; i++){
+        var p = pts[i];
+        var above = (p.y - (slope*p.x + intercept)) < 0;
+        var pa = above ? (0.5 + 0.5*Math.sin(t*2 + p.ph)) * lock : 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, above ? 2.2 + pa*1.6 : 1.8, 0, Math.PI*2);
+        if (above){ ctx.fillStyle = signal; ctx.globalAlpha = 0.55 + 0.4*pa; }
+        else { ctx.fillStyle = pulse; ctx.globalAlpha = 0.4; }
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      window.requestAnimationFrame(frame);
+    }
+    if (reduce){ t0 = 0; running = true; frame(5500); running = false; }
+    else {
+      window.requestAnimationFrame(frame);
+      if ('IntersectionObserver' in window){
+        var io = new IntersectionObserver(function(entries){
+          entries.forEach(function(en){
+            if (en.isIntersecting && !running){ running = true; t0 = null; window.requestAnimationFrame(frame); }
+            else if (!en.isIntersecting){ running = false; }
+          });
+        }, {threshold: 0.05});
+        io.observe(slides[0]);
+      }
+    }
+  }
+})();
+</script>
+
+</body></html>

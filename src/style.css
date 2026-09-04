@@ -141,6 +141,19 @@ h1, h2, h3, p { margin: 0; }
 .pattern-card { min-height: 164px; padding: 18px; color: var(--paper); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; text-align: left; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; transition: transform .2s, border-color .2s, background .2s; animation: enter .5s both; animation-delay: var(--delay); }
 .pattern-card:hover:not(:disabled) { transform: translateY(-5px); border-color: var(--lime); background: var(--panel-2); }
 .pattern-card.locked { opacity: .5; cursor: not-allowed; }
+.pattern-card.custom { border-color: rgba(212, 250, 107, .4); background: rgba(212, 250, 107, .04); }
+
+/* ---------- pattern discovery ---------- */
+.discover-card { margin-top: 32px; border: 1px solid rgba(212, 250, 107, .35); background: rgba(212, 250, 107, .04); border-radius: 10px; padding: 24px; }
+.discover-head h3 { font: 600 20px 'Space Grotesk'; letter-spacing: -.5px; margin-top: 6px; }
+.discover-sub { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin-top: 8px; max-width: 60ch; }
+.discover-card textarea { margin-top: 14px; }
+.discover-error { color: var(--bad); font-size: 12px; margin-top: 10px; }
+.discover-hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+.discover-hint a { color: var(--lime); }
+.discover-card .primary-action { margin-top: 14px; }
+.custom-patterns-head { margin-top: 34px; margin-bottom: -8px; }
+.confirm-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 .card-top { display: flex; align-items: center; gap: 10px; }
 .pattern-icon { font: 26px 'Space Grotesk'; }
 .pattern-label, .card-trigger, .part-kicker, .loop-strip span, .selected-stamp small { font: 10px 'DM Mono'; letter-spacing: .08em; text-transform: uppercase; }

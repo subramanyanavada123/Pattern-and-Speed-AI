@@ -42,6 +42,14 @@ export type Scenario = {
   expectedFire: boolean
   /** true if Mistral proposed this scenario (still fully structured, still validated) */
   fromMistral: boolean
+  /**
+   * false only for an AI-generated scenario whose expectedFire is still a
+   * guess the user hasn't confirmed against their real experience. Hand-authored
+   * scenarios and anything the user has confirmed are always true. A scenario
+   * run only enters the regression/evolution evidence corpus once verified —
+   * otherwise the "did this used to work" check would be graded against a guess.
+   */
+  verified: boolean
 }
 
 export type Pattern = {
@@ -59,6 +67,10 @@ export type Pattern = {
   flags: FlagSpec[]
   actions: ActionSpec[]
   scenarios: Scenario[]
+  /** true for a pattern Mistral extracted from the user's own free-text description, not a built-in preset */
+  custom?: boolean
+  /** the user's original description, kept for reference when a custom pattern is shown */
+  sourceDescription?: string
 }
 
 export type LessonChoice = {
@@ -162,4 +174,6 @@ export type SaveState = {
   streak: number
   /** true once the user has seen the v2→v3 migration banner, so it only shows once */
   sawMigrationNotice: boolean
+  /** patterns Mistral extracted from a user's own description — kept alongside the built-in presets */
+  customPatterns: Pattern[]
 }

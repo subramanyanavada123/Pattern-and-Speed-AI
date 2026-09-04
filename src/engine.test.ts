@@ -5,7 +5,7 @@ import type { Condition, RuleSet, Scenario, FlagSpec, ActionSpec } from './types
 function scenario(overrides: Partial<Scenario> = {}): Scenario {
   return {
     id: 's1', patternId: 'gym', kind: 'normal', title: 't', sceneText: 'x',
-    clockMin: 12 * 60, dayOfWeek: 1, flags: {}, expectedFire: true, fromMistral: false,
+    clockMin: 12 * 60, dayOfWeek: 1, flags: {}, expectedFire: true, fromMistral: false, verified: true,
     ...overrides,
   }
 }
