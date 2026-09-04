@@ -55,6 +55,14 @@ let realWorld: RealWorldContext | null = null
 let realWorldBusy = false
 let realWorldError = ''
 
+// ---- the Shift: chained scenarios, no detour, ends the moment the agent gets one wrong ----
+/** Correct calls in a row so far this Shift. Resets to 0 on a wrong call or leaving Simulate. */
+let shiftLength = 0
+/** Set for exactly one reveal render — the call that just ended the Shift. */
+let shiftJustBroke = false
+/** The shiftLength value at the moment it broke, so the break screen can say "you got to 7". */
+let shiftLengthAtBreak = 0
+
 const LESSON_PARTS: PartId[] = ['perceive', 'decide', 'act', 'learn']
 
 // ---------------------------------------------------------------- helpers
@@ -114,8 +122,9 @@ function renderHeader(): string {
   const live = keyStore.has()
   return `<header class="topbar">
     <a class="wordmark" href="#" data-action="home"><span class="wordmark-mark">✳</span> Pattern Machine</a>
-    <div class="mission"><span class="mission-dot"></span> Turn a loop that runs you into a deterministic agent</div>
-    <button class="key-pill ${live ? 'on' : ''}" data-action="settings">${live ? '● MISTRAL LIVE' : '○ ADD MISTRAL KEY'}</button>
+    <div class="mission"><span class="mission-dot"></span> Learn how helpers use clues, rules, and actions</div>
+    <button class="top-reset" data-action="start-fresh">↺ Reset learning</button>
+    <button class="key-pill ${live ? 'on' : ''}" data-action="settings">${live ? '● MISTRAL COACH ON' : '○ ADD AI COACH'}</button>
     <div class="xp"><span>${s.streak > 0 ? `🔥 ${s.streak}-DAY` : 'LEVEL 01'}</span><strong>${s.xp} XP</strong></div>
   </header>`
 }
@@ -140,6 +149,7 @@ function renderRail(): string {
   const cur = order.indexOf(phase)
   return `<aside class="sidebar">
     ${phase !== 'home' ? `<button class="back-home" data-action="home">← Home</button>` : ''}
+    <button class="start-fresh-link" data-action="start-fresh">↺ Reset learning</button>
     <div class="sidebar-title">YOUR RUN</div>
     <div class="progress-track">${steps
       .map(([key, label, num], i) => {
@@ -165,7 +175,7 @@ function renderAgentMini(): string {
     <div class="agent-mini-head"><b>${esc(p.title)}</b><span class="ver">v${a.version}</span></div>
     <div class="agent-mini-row"><i>conditions</i> ${a.rules.conditions.length}</div>
     <div class="agent-mini-row"><i>does</i> ${esc(clip(action, 60))}</div>
-    <div class="agent-mini-foot">${a.history.length} evolution${a.history.length === 1 ? '' : 's'} · ${a.scenarioLog.length} run${a.scenarioLog.length === 1 ? '' : 's'}</div>
+    <div class="agent-mini-foot">${a.history.length} evolution${a.history.length === 1 ? '' : 's'} · ${a.scenarioLog.length} run${a.scenarioLog.length === 1 ? '' : 's'}${a.bestShiftLength ? ` · best shift ${a.bestShiftLength}` : ''}</div>
   </div>`
 }
 
@@ -202,10 +212,10 @@ function renderHome(): string {
   if (returning) {
     return `<section class="screen home-return">
       <div class="eyebrow">WELCOME BACK${away > 0 ? ` · ${away} DAY${away === 1 ? '' : 'S'} AWAY` : ''}</div>
-      <h1>Your agent is<br><em>still running.</em></h1>
-      <p class="lede">${esc(getPattern(a!.patternId).title)} — version ${a!.version}, ${a!.history.length} evolution${a!.history.length === 1 ? '' : 's'} in, tested against ${a!.scenarioLog.length} scenario${a!.scenarioLog.length === 1 ? '' : 's'}. Run it against a new case, or make it smarter from the evidence so far.</p>
+      <h1>${a!.bestShiftLength > 0 ? `Beat your best:<br><em>${a!.bestShiftLength} in a row.</em>` : `Your agent is<br><em>still running.</em>`}</h1>
+      <p class="lede">${esc(getPattern(a!.patternId).title)} — version ${a!.version}, ${a!.history.length} evolution${a!.history.length === 1 ? '' : 's'} in, tested against ${a!.scenarioLog.length} scenario${a!.scenarioLog.length === 1 ? '' : 's'}. ${a!.bestShiftLength > 0 ? 'Every wrong call ends the streak — see how far it holds this time.' : 'Run it against a new case and see how far it holds before it breaks.'}</p>
       <div class="home-cards">
-        <button class="home-card accent" data-action="to-simulate"><span class="hc-k">PREDICT</span><strong>Run another scenario</strong><p>Predict, reveal, and see exactly which condition decided it.</p><span class="hc-go">→</span></button>
+        <button class="home-card accent" data-action="to-simulate"><span class="hc-k">SHIFT</span><strong>${a!.bestShiftLength > 0 ? `Beat ${a!.bestShiftLength}` : 'Start a shift'}</strong><p>Chained scenarios, no detour — one wrong call ends it.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-evolve"><span class="hc-k">EVOLVE</span><strong>Review the evidence</strong><p>See every accepted edit, with before/after and regression checks.</p><span class="hc-go">→</span></button>
         <button class="home-card" data-action="to-choose"><span class="hc-k">EXPAND</span><strong>Build a second agent</strong><p>${s.unlockedPatterns.length} loop${s.unlockedPatterns.length === 1 ? '' : 's'} unlocked. New ones open as you go.</p><span class="hc-go">→</span></button>
       </div>
@@ -424,6 +434,36 @@ function renderRuleEditor(p: ReturnType<typeof getPattern>, emphasis: DiagnosisI
  * hasWeatherFlag gates whether we say the flag was actually applied to this
  * pattern's scenario, since only the gym pattern currently has isRaining.
  */
+/**
+ * The Shift: chained scenarios with a live streak. This is the actual game —
+ * a single flat Predict/Reveal has no stakes, so scenarios now run back to
+ * back and the streak breaks the instant the agent calls one wrong. Tone
+ * escalates with length so getting deep into a Shift actually feels like
+ * something is on the line.
+ */
+function renderShiftBanner(isLiveScenario: boolean): string {
+  if (isLiveScenario) {
+    return `<div class="shift-banner shift-live"><span>◉ LIVE CONTEXT — DOESN'T COUNT TOWARD YOUR SHIFT</span></div>`
+  }
+  const a = store.activeAgent()
+  const best = a?.bestShiftLength ?? 0
+  if (shiftLength === 0) {
+    return `<div class="shift-banner shift-start">
+      <span>NEW SHIFT${best > 0 ? ` · BEST RUN: ${best}` : ''}</span>
+      <p>Every wrong call ends it. How many can your rule survive in a row?</p>
+    </div>`
+  }
+  const tier = shiftLength >= 8 ? 'shift-blazing' : shiftLength >= 4 ? 'shift-hot' : 'shift-warm'
+  const line =
+    shiftLength >= 8 ? "This is the longest run you've had. One slip ends it."
+    : shiftLength >= 4 ? 'The rule is holding under pressure. Stay sharp.'
+    : "It's working — don't get comfortable."
+  return `<div class="shift-banner ${tier}">
+    <span class="shift-count">${shiftLength} IN A ROW</span>
+    <p>${line}${best > 0 ? ` · best: ${best}` : ''}</p>
+  </div>`
+}
+
 function renderRealWorldPanel(hasWeatherFlag: boolean): string {
   if (realWorldBusy) {
     return `<div class="realworld-panel"><div class="evolving">Getting your location and current weather…</div></div>`
@@ -447,8 +487,21 @@ function renderRealWorldPanel(hasWeatherFlag: boolean): string {
     </div>`
   }
   return `<div class="realworld-cta">
-    <button class="ghost-link" data-action="use-realworld">🌍 Use my real location, weather &amp; time instead</button>
+    <button class="ghost-link ${realWorldBusy ? 'disabled' : ''}" data-action="use-realworld" ${realWorldBusy ? 'disabled' : ''}>🌍 Use my real location, weather &amp; time instead</button>
     ${realWorldError ? `<p class="realworld-error">${esc(realWorldError)}</p>` : ''}
+  </div>`
+}
+
+function renderAgentConsole(agent: Agent, pattern: ReturnType<typeof getPattern>): string {
+  return `<div class="agent-console">
+    <div class="agent-console-head"><div><span class="eyebrow">AGENT CONSOLE</span><strong>${esc(pattern.title)} · v${agent.version}</strong></div><span class="console-status">● READY</span></div>
+    <p class="console-explainer">This is the helper you built. It reads clues, checks its rule, and chooses one small action. The tools below help you test and improve it.</p>
+    <div class="tool-grid">
+      <button class="tool-tile" data-action="sim-next"><span>⌁</span><b>Scenario Lab</b><small>Give it a new situation and predict what happens.</small></button>
+      <button class="tool-tile" data-action="open-coach"><span>?</span><b>Ask the Coach</b><small>Get one question that helps you find a weak spot.</small></button>
+      <button class="tool-tile" data-action="use-realworld"><span>◉</span><b>Live Context</b><small>Test with your time and weather, only with permission.</small></button>
+      <button class="tool-tile" data-action="test-reminder"><span>→</span><b>Try the Action</b><small>See the helper's action as a permissioned reminder.</small></button>
+    </div>
   </div>`
 }
 
@@ -474,10 +527,12 @@ function renderSimulate(): string {
 
   if (simPhase === 'predicting') {
     const hasWeatherFlag = p.flags.some((f) => f.id === 'isRaining')
+    const isLiveScenario = scenario.kind === 'live'
     return `<section class="screen sim-screen">
       <div class="eyebrow">ACT III / ${isReplaying ? 'REPLAY — SAME SCENARIO, EDITED RULE' : 'PREDICT'} · ${scenario.kind.toUpperCase()} CASE</div>
-      <h2>${isReplaying ? 'Same case, new rule —' : 'Before you look —'}<br><em>will it fire?</em></h2>
-      ${isReplaying ? '<p class="lede">This is the exact scenario that failed before. Predict again with your edited rule.</p>' : ''}
+      <h2>${isReplaying ? 'Same case, new rule —' : shiftLength === 0 ? 'One call.' : 'Keep it going —'}<br><em>will it fire?</em></h2>
+      ${isReplaying ? '<p class="lede">This is the exact scenario that failed before. Predict again with your edited rule.</p>' : renderShiftBanner(isLiveScenario)}
+      ${renderAgentConsole(a, p)}
       ${ruleSummary}
       <div class="scenario-card">
         <div class="scenario-tag">${esc(scenario.title)}${realWorld ? ' · LIVE' : ''}</div>
@@ -513,26 +568,40 @@ function renderSimulate(): string {
   if (isLive) {
     return `<section class="screen sim-screen">
       <div class="eyebrow">ACT III / LIVE REVEAL · YOUR ACTUAL CONDITIONS</div>
-      <div class="sim-source live">● REAL LOCATION + WEATHER — no scripted answer to compare to</div>
-      <h2>Right now,<br><em>this is what your agent does.</em></h2>
+      <div class="sim-source live">● PRACTICE MODE · REAL CONTEXT, NO RIGHT ANSWER</div>
+      <div class="active-agent-banner"><span class="agent-orbit">✳</span><div><small>YOU ARE TESTING</small><strong>${esc(p.title)}</strong><span>Agent v${a.version} · ${a.rules.conditions.length} clue${a.rules.conditions.length === 1 ? '' : 's'} · ${a.scenarioLog.length} previous test${a.scenarioLog.length === 1 ? '' : 's'}</span></div><button class="ghost-link" data-action="to-choose">Choose another loop</button></div>
+      <h2>Right now,<br><em>what does your helper do?</em></h2>
       ${ruleSummary}
       <div class="scenario-card"><p class="scenario-scene">${esc(narratedResult!.sceneNarration)}</p></div>
       ${traceTable}
       <div class="compare-banner tone-mute">
-        <b>Your prediction was ${predictionCorrect ? 'correct' : 'different from the actual result'}.</b> There's no authored "right answer" for a real moment — this shows exactly what your rule does with reality's actual numbers plugged in, right now.
+        <b>This is a practice observation.</b> ${predictionCorrect ? 'Your prediction matched the helper.' : 'Your prediction differed from the helper.'} There is no authored right answer here; the point is to notice what your rule would do with real context.
       </div>
       <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
+      <div class="learning-takeaway"><div class="eyebrow">WHAT YOU JUST LEARNED</div><div class="takeaway-grid"><div><b>NOTICE</b><span>Rules need observable clues, not guesses.</span></div><div><b>THINK</b><span>IF and UNLESS decide whether the helper fires.</span></div><div><b>DO</b><span>THEN names one small action.</span></div><div><b>REMEMBER</b><span>Real practice gives evidence for the next edit.</span></div></div></div>
       <div class="sim-controls">
-        <button class="secondary-action" data-action="clear-realworld">Back to authored scenarios <span>→</span></button>
-        <button class="primary-action" data-action="use-realworld">Refresh real conditions <span>↻</span></button>
+        <button class="secondary-action" data-action="clear-realworld" ${simBusy ? 'disabled' : ''}>Back to authored scenarios <span>→</span></button>
+        <button class="primary-action" data-action="use-realworld" ${simBusy ? 'disabled' : ''}>Refresh real conditions <span>↻</span></button>
       </div>
+      <div class="next-moves"><span>NEXT MOVE</span><button class="ghost-link" data-action="sim-next">Test an authored case</button><button class="ghost-link" data-action="test-reminder">Try the action</button><button class="ghost-link" data-action="sim-repair">Tune this helper</button><button class="ghost-link" data-action="to-choose">Build another helper</button></div>
     </section>`
   }
+
+  const broke = shiftJustBroke && result !== 'correct'
+  const streakHeadline = result === 'correct'
+    ? shiftLength >= 8 ? `Still going.<br><em>${shiftLength} straight.</em>`
+      : shiftLength >= 4 ? `Holding.<br><em>${shiftLength} in a row.</em>`
+      : `Correct.<br><em>Next one's coming.</em>`
+    : meta!.label === 'Missed'
+      ? `It went quiet.<br><em>It shouldn't have.</em>`
+      : `It fired.<br><em>It shouldn't have.</em>`
 
   return `<section class="screen sim-screen">
     <div class="eyebrow">ACT III / REVEAL · VERDICT: ${meta!.label.toUpperCase()}</div>
     ${narratedResult!.live ? '<div class="sim-source live">● NARRATED BY MISTRAL — verdict is deterministic either way</div>' : `<div class="sim-source scripted">○ SCRIPTED EXPLANATION${narratedResult!.fallbackReason ? ' — ' + esc(narratedResult!.fallbackReason) : ''}</div>`}
-    <h2>Here's exactly<br><em>why.</em></h2>
+    ${broke ? `<div class="shift-broke"><span>SHIFT ENDED AT ${shiftLengthAtBreak}</span>${shiftLengthAtBreak >= (a.bestShiftLength || 0) && shiftLengthAtBreak > 0 ? '<b>NEW BEST</b>' : ''}</div>` : ''}
+    <h2>${streakHeadline}</h2>
+    ${renderAgentConsole(a, p)}
     ${ruleSummary}
 
     <div class="scenario-card">
@@ -542,7 +611,7 @@ function renderSimulate(): string {
     ${traceTable}
 
     <div class="compare-banner tone-${meta!.tone}">
-      <b>Your prediction was ${predictionCorrect ? 'correct' : 'not quite'}.</b> ${meta!.label === 'Correct' ? 'The helper behaved correctly for this case.' : meta!.label === 'Missed' ? 'The helper should have fired here but stayed quiet — it needs a broader condition or one fewer exception.' : 'The helper fired here but should have stayed quiet — it needs a narrower condition or a new exception.'}
+      <b>Your prediction was ${predictionCorrect ? 'correct' : 'not quite'}.</b> ${meta!.label === 'Correct' ? 'The rule read the moment right.' : meta!.label === 'Missed' ? 'The rule stayed quiet exactly when it needed to act — too narrow, or missing the exception that should never have applied here.' : 'The rule fired when it should have held back — too broad, or missing an exception this case needed.'}
     </div>
 
     <p class="explain-narration">${esc(narratedResult!.explainNarration)}</p>
@@ -551,14 +620,14 @@ function renderSimulate(): string {
 
     <div class="sim-controls">
       ${result === 'correct'
-        ? `<button class="secondary-action" data-action="sim-next">Try another scenario <span>→</span></button>
-           <button class="primary-action" data-action="to-evolve">Review evidence &amp; evolve <span>→</span></button>`
-        : `<button class="secondary-action" data-action="sim-next">Skip for now <span>→</span></button>
-           <button class="primary-action ${evolving ? 'disabled' : ''}" data-action="sim-repair">Repair this rule <span>✎</span></button>`
+        ? `<button class="secondary-action" data-action="sim-next">Next scenario <span>→</span></button>
+           <button class="primary-action" data-action="to-evolve">Bank it — review evidence <span>→</span></button>`
+        : `<button class="secondary-action" data-action="sim-next">Start a new shift <span>→</span></button>
+           <button class="primary-action ${evolving ? 'disabled' : ''}" data-action="sim-repair">Fix the rule <span>✎</span></button>`
       }
-      <button class="ghost-link" data-action="sim-stress">🎲 Try a harder scenario</button>
+      <button class="ghost-link ${simBusy ? 'disabled' : ''}" data-action="sim-stress" ${simBusy ? 'disabled' : ''}>🎲 Throw a harder case at it</button>
     </div>
-    ${a.scenarioLog.length ? `<p class="sim-note">${a.scenarioLog.length} scenario${a.scenarioLog.length === 1 ? '' : 's'} run so far.</p>` : ''}
+    ${a.scenarioLog.length ? `<p class="sim-note">${a.scenarioLog.length} scenario${a.scenarioLog.length === 1 ? '' : 's'} run so far${a.bestShiftLength ? ` · best shift: ${a.bestShiftLength}` : ''}.</p>` : ''}
   </section>`
 }
 
@@ -586,6 +655,7 @@ function renderEvolve(): string {
         <div class="af-rule"><span>THEN</span><p>${esc(p.actions.find((x) => x.id === a.rules.actionId)?.label ?? '—')}</p></div>
       </div>
     </div>
+    <div class="agent-actions"><button class="secondary-action" data-action="share-agent">Share this agent <span>↗</span></button><button class="secondary-action" data-action="download-agent">Download JSON <span>↓</span></button></div>
 
     ${pendingEvolution ? renderPendingEvolution(p) : `<div class="checkin"><p class="lede">No pending proposal. Run more scenarios in the simulator to generate evidence for the next edit.</p><button class="primary-action" data-action="to-simulate">Back to the simulator →</button></div>`}
 
@@ -658,7 +728,7 @@ function renderCitations(citations: Citation[] | undefined): string {
 }
 
 function renderCoachPanel(): string {
-  if (phase !== 'build' && !coachLog.length) return ''
+  if (phase !== 'build' && !coachLog.length && !coachBusy) return ''
   const open = coachLog.length > 0 || coachBusy
   if (!open) return ''
   return `<div class="coach-panel">
@@ -710,9 +780,9 @@ function renderSettings(): string {
       <div class="modal-status" data-key-status></div>
 
       <div class="modal-danger">
-        <div class="modal-danger-head">START FRESH</div>
-        <p class="modal-p">Wipes every agent, all XP and streak, and your lesson progress on this device — for showing someone a genuine first-time run. This does not touch your Mistral key.</p>
-        <button class="secondary-action danger ${resetArmed ? 'armed' : ''}" data-action="reset-progress">${resetArmed ? 'Click again to permanently erase everything ✕' : 'Erase all progress'}</button>
+        <div class="modal-danger-head">RESET LEARNING PROGRESS</div>
+        <p class="modal-p">Erases your agents, scenarios, XP, streak, and lesson progress on this device. Your Mistral API key, selected model, and settings stay saved.</p>
+        <button class="secondary-action danger ${resetArmed ? 'armed' : ''}" data-action="reset-progress">${resetArmed ? 'Click again to reset learning ✕' : 'Reset learning progress'}</button>
       </div>
     </div>
   </div>`
@@ -841,6 +911,8 @@ modalRoot.addEventListener('click', async (event) => {
     pendingEvolution = null
     realWorld = null
     realWorldError = ''
+    shiftLength = 0
+    shiftJustBroke = false
     lessonIndex = 0; lessonPicked = null; lessonRevealed = false
     phase = 'home'
     render()
@@ -913,7 +985,7 @@ app.addEventListener('click', async (event) => {
 
   // ---- navigation
   if (action === 'home') { go('home'); return }
-  if (action === 'to-choose') { go('choose'); return }
+  if (action === 'start-fresh') { settingsOpen = true; resetArmed = true; render(); return }
   if (action === 'to-evolve') {
     // Coming straight from Home's "Welcome back" cards (no draft in flight)
     // means we're not necessarily still on the pattern from a PREVIOUS visit
@@ -1044,6 +1116,14 @@ app.addEventListener('click', async (event) => {
     await doStressScenario()
     return
   }
+  if (action === 'test-reminder') {
+    if (!('Notification' in window)) { showToast('This browser does not support reminders.'); return }
+    const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission
+    if (permission !== 'granted') { showToast('Reminder permission was not granted.'); return }
+    showToast('Action armed — your helper will remind you in 10 seconds.')
+    window.setTimeout(() => new Notification('Pattern Machine', { body: 'Your helper noticed the moment. Try the small action you designed.' }), 10_000)
+    return
+  }
   if (action === 'use-realworld') {
     await doUseRealWorld()
     return
@@ -1053,6 +1133,21 @@ app.addEventListener('click', async (event) => {
     realWorldError = ''
     currentScenario = null // re-pick a normal authored scenario
     render()
+    return
+  }
+  if (action === 'to-choose') {
+    abort?.abort()
+    abort = null
+    currentScenario = null
+    narratedResult = null
+    realWorld = null
+    realWorldError = ''
+    simPhase = 'predicting'
+    userPrediction = null
+    isReplaying = false
+    shiftLength = 0
+    shiftJustBroke = false
+    go('choose')
     return
   }
   if (action === 'sim-repair') {
@@ -1069,11 +1164,50 @@ app.addEventListener('click', async (event) => {
     if (blocking) { showToast('Blocked — this edit regresses a previously-correct scenario.'); return }
     const updated = store.evolveAgent(pendingEvolution)
     pendingEvolution = null
+    coachLog = []
+    coachLive = null
+    coachBusy = false
+    simBusy = false
+    evolving = false
+    userPrediction = null
+    scenarioToReplay = null
+    isReplaying = false
     showToast(updated ? `Agent evolved to v${updated.version}.` : 'Could not apply — try again.')
     render()
     return
   }
   if (action === 'evo-reject') { pendingEvolution = null; render(); return }
+  if (action === 'share-agent' || action === 'download-agent') {
+    const agent = store.activeAgent()
+    if (!agent) return
+    const pattern = getPattern(agent.patternId)
+    const payload = {
+      app: 'Pattern Machine',
+      pattern: pattern.title,
+      version: agent.version,
+      rule: {
+        if: agent.rules.conditions.map((c) => describeCondition(c, pattern.flags)),
+        unless: agent.rules.exceptions.map((c) => describeCondition(c, pattern.flags)),
+        then: pattern.actions.find((a) => a.id === agent.rules.actionId)?.label ?? 'No action',
+      },
+      tests: agent.scenarioLog.length,
+      evolutions: agent.history.length,
+    }
+    const readable = `Pattern Machine / ${pattern.title}\nAgent v${agent.version}\nIF ${payload.rule.if.join(' AND ') || '(none)'}\nUNLESS ${payload.rule.unless.join(' OR ') || '(none)'}\nTHEN ${payload.rule.then}\nTests: ${payload.tests} · Evolutions: ${payload.evolutions}`
+    if (action === 'download-agent') {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url; link.download = `${pattern.id}-agent-v${agent.version}.json`; link.click(); URL.revokeObjectURL(url)
+      showToast('Agent JSON downloaded.')
+    } else if (navigator.share) {
+      await navigator.share({ title: `Pattern Machine / ${pattern.title}`, text: readable }).catch(() => undefined)
+    } else {
+      await navigator.clipboard?.writeText(readable)
+      showToast('Agent copied to clipboard.')
+    }
+    return
+  }
 })
 
 // coach conversation
@@ -1122,10 +1256,12 @@ async function doReveal() {
     const trace = narratedResult.trace
     if (narratedResult.fallbackReason) showToast(`Mistral unavailable: ${narratedResult.fallbackReason}`)
 
+    shiftJustBroke = false
     if (currentScenario.kind === 'live') {
       // A real-world moment has no trustworthy expectedFire to score against —
-      // show the trace as pure observation, but don't record it as evidence
-      // and don't let it drive an evolution proposal off a fabricated verdict.
+      // show the trace as pure observation, but don't record it as evidence,
+      // don't let it drive an evolution proposal off a fabricated verdict, and
+      // don't let it affect the Shift streak either way.
     } else {
       const result: PredictionResult = scoreAgent(trace, currentScenario.expectedFire)
       const predictionCorrect = trace.fired === userPrediction
@@ -1133,6 +1269,14 @@ async function doReveal() {
         at: Date.now(), scenarioId: currentScenario.id, agentVersion: agent.version,
         userPredictedFire: userPrediction!, predictionCorrect, trace, predictionResult: result,
       })
+      if (result === 'correct') {
+        shiftLength += 1
+      } else {
+        shiftJustBroke = true
+        shiftLengthAtBreak = shiftLength
+        store.recordShiftResult(shiftLength)
+        shiftLength = 0
+      }
       if (result !== 'correct' && updated) {
         evolving = true
         render()

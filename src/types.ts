@@ -110,6 +110,8 @@ export type Agent = {
   history: EvolutionEntry[]
   /** every scenario this agent has ever been run against — the regression corpus */
   scenarioLog: ScenarioRun[]
+  /** longest unbroken run of correct calls in a single Shift — the score to beat */
+  bestShiftLength: number
   createdAt: number
   updatedAt: number
 }

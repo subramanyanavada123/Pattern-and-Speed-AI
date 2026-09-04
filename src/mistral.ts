@@ -21,7 +21,10 @@ type GenOpts = {
   json?: boolean
 }
 
-type ChatMessage = { role: 'system' | 'user'; content: string }
+type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content?: string; tool_calls?: ToolCall[]; name?: string; tool_call_id?: string }
+
+export type ToolCall = { id: string; function: { name: string; arguments: string } }
+export type MistralTool = { type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }
 
 function headers(key: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
@@ -113,6 +116,56 @@ export async function generate(prompt: string, opts: GenOpts = {}): Promise<stri
   const text = responseText(await res.json())
   if (!text) throw new MistralError('Mistral returned no text')
   return text
+}
+
+/**
+ * Run a short tool-calling conversation. Tools are executed by the app, never
+ * by Mistral. The callback result is returned to the model as evidence.
+ */
+export async function generateWithTools(
+  prompt: string,
+  opts: GenOpts,
+  tools: MistralTool[],
+  execute: (name: string, args: Record<string, unknown>) => Promise<unknown> | unknown,
+): Promise<string> {
+  const key = keyStore.get()
+  if (!key) throw new MistralError('No Mistral API key set', 0)
+  const model = keyStore.model()
+  const conversation: ChatMessage[] = messages(prompt, opts.system)
+  for (let turn = 0; turn < 3; turn++) {
+    let res: Response
+    try {
+      res = await fetch(`${ENDPOINT}/chat/completions`, {
+        method: 'POST', headers: headers(key),
+        body: JSON.stringify({ ...buildBody(prompt, opts), messages: conversation, tools, tool_choice: 'auto', stream: false }),
+        signal: opts.signal,
+      })
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e
+      throw new MistralError('Network error reaching Mistral', 0)
+    }
+    if (!res.ok) {
+      const detail = await detailOf(res)
+      if (res.status === 401) throw new MistralError('That Mistral API key was rejected. Check it in Settings.', 401)
+      if (res.status === 429) throw new MistralError(quotaMessage(model, detail, res.headers.get('retry-after')), 429)
+      throw new MistralError(detail || `Mistral returned ${res.status}`, res.status)
+    }
+    const json = await res.json()
+    const message = json?.choices?.[0]?.message as ChatMessage | undefined
+    const calls = message?.tool_calls ?? []
+    if (!calls.length) return responseText(json)
+    conversation.push({ role: 'assistant', content: message?.content ?? '', tool_calls: calls })
+    for (const call of calls) {
+      let result: unknown
+      try {
+        result = await execute(call.function.name, JSON.parse(call.function.arguments || '{}'))
+      } catch (e) {
+        result = { error: e instanceof Error ? e.message : 'Tool failed' }
+      }
+      conversation.push({ role: 'tool', name: call.function.name, tool_call_id: call.id, content: JSON.stringify(result) })
+    }
+  }
+  throw new MistralError('Mistral requested too many tool steps. Try a more specific question.')
 }
 
 export async function* stream(prompt: string, opts: GenOpts = {}): AsyncGenerator<string> {

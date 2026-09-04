@@ -1,7 +1,7 @@
 import type { Agent, Pattern } from './types'
-import { generate, MistralError, searchWeb, type Citation } from './mistral'
+import { generate, generateWithTools, MistralError, searchWeb, type Citation, type MistralTool } from './mistral'
 import { keyStore } from './store'
-import { describeCondition } from './engine'
+import { describeCondition, matchScenario } from './engine'
 
 /**
  * The Socratic coach. It does NOT give the user the answer — it challenges the
@@ -60,6 +60,49 @@ function needsWebSearch(userText: string): boolean {
   return /\b(research|study|studies|evidence|proof|source|cite|citation|real(ly)?|actual(ly)?|is (this|that) (true|legit)|does this work|works\??$)\b/i.test(userText)
 }
 
+const COACH_TOOLS: MistralTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'inspect_current_agent',
+      description: 'Inspect the learner agent rules and its pattern. Use this before commenting on the current build.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_test_scenarios',
+      description: 'List the authored scenarios available for testing this pattern.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_test_scenario',
+      description: 'Run the deterministic engine against one authored scenario. The result is authoritative.',
+      parameters: { type: 'object', properties: { scenarioId: { type: 'string' } }, required: ['scenarioId'], additionalProperties: false },
+    },
+  },
+]
+
+function coachToolExecutor(agent: Agent, pattern: Pattern, name: string, args: Record<string, unknown>): unknown {
+  if (name === 'inspect_current_agent') {
+    return { pattern: pattern.title, version: agent.version, conditions: agent.rules.conditions, exceptions: agent.rules.exceptions, actionId: agent.rules.actionId, testsRun: agent.scenarioLog.length }
+  }
+  if (name === 'list_test_scenarios') {
+    return pattern.scenarios.map((s) => ({ id: s.id, title: s.title, kind: s.kind, expectedFire: s.expectedFire }))
+  }
+  if (name === 'run_test_scenario') {
+    const scenario = pattern.scenarios.find((s) => s.id === args.scenarioId)
+    if (!scenario) throw new Error('Unknown scenario id')
+    const trace = matchScenario(agent.rules, scenario)
+    return { scenario: scenario.title, expectedFire: scenario.expectedFire, fired: trace.fired, conditions: trace.conditions, exceptions: trace.exceptions, actionId: trace.actionId }
+  }
+  throw new Error(`Unknown tool: ${name}`)
+}
+
 export async function reply(
   agent: Agent,
   pattern: Pattern,
@@ -100,7 +143,7 @@ USER: ${userText}
 
 Respond as COACH. Same rules: 45 words, one push, no finished answers.`
   try {
-    const text = await generate(prompt, { system: SYSTEM, temperature: 0.6, maxTokens: 160, signal })
+    const text = await generateWithTools(prompt, { system: SYSTEM, temperature: 0.6, maxTokens: 220, signal }, COACH_TOOLS, (name, args) => coachToolExecutor(agent, pattern, name, args))
     return { text, live: true }
   } catch (e) {
     if (e instanceof MistralError) return { text: `Coach is offline (${e.message}). Keep going without it — check your conditions and exceptions against the scenario bank.`, live: false }

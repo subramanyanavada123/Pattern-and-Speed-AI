@@ -90,10 +90,17 @@ function migrateFromV2(): { save: SaveState; migratedFromV2: boolean } {
 
 function normalise(s: SaveState): SaveState {
   const base = blankSave()
+  const agents: SaveState['agents'] = {}
+  for (const [id, agent] of Object.entries(s.agents ?? {})) {
+    // Backfill fields added after some agents were already saved, so an old
+    // agent doesn't carry `undefined` into arithmetic (e.g. bestShiftLength
+    // comparisons) or JSON.stringify holes.
+    agents[id] = { ...agent, bestShiftLength: typeof agent.bestShiftLength === 'number' ? agent.bestShiftLength : 0 }
+  }
   return {
     ...base,
     ...s,
-    agents: s.agents ?? {},
+    agents,
     completedLessons: Array.isArray(s.completedLessons) ? s.completedLessons : [],
     unlockedPatterns: Array.isArray(s.unlockedPatterns) && s.unlockedPatterns.length ? s.unlockedPatterns : base.unlockedPatterns,
   }
@@ -241,6 +248,18 @@ export const store = {
     return agent
   },
 
+  /** Record a new best Shift length for the active agent if it beats the current record. */
+  recordShiftResult(length: number): void {
+    const agent = this.activeAgent()
+    if (!agent) return
+    if (length > agent.bestShiftLength) {
+      agent.bestShiftLength = length
+      agent.updatedAt = Date.now()
+      state.agents[agent.patternId] = agent
+      persist()
+    }
+  },
+
   /**
    * Apply an accepted, regression-checked evolution: rewrite ONE structured
    * field of the active agent's rules, bump version, log it. Refuses to apply
@@ -284,6 +303,7 @@ export function newAgent(patternId: string): Agent {
     version: 1,
     history: [],
     scenarioLog: [],
+    bestShiftLength: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   }
