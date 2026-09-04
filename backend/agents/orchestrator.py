@@ -117,44 +117,86 @@ async def _plan(client: httpx.AsyncClient, api_key: str, model: str, pattern_des
         return _fallback_roles(), "", f"Could not parse planner output ({exc}), defaulting to a small cross-category roster."
 
 
+def _instantiate(role: str, model: str):
+    """Copy a template agent (dataclasses.replace) rather than mutating the
+    shared ALL_AGENTS singletons — those are module-level and reused across
+    every request, so mutating .model in place would race between concurrent
+    requests using different models. Both Agent and SearchAgent carry a
+    `model` field; ComputeAgent doesn't (no LLM call at all), so it's used
+    as-is — nothing to swap."""
+    template = ALL_AGENTS[role]
+    return replace(template, model=model) if hasattr(template, "model") else template
+
+
+async def _run_many(api_key: str, model: str, roles: list[str], context: str) -> tuple[list[AgentResult], int]:
+    """The actual concurrency primitive shared by every orchestration mode
+    (planned, custom, or a solo run of one): every agent's run() coroutine is
+    scheduled at once via asyncio.gather and they execute in parallel — LLM
+    calls, a real web search, and real local computation all racing
+    together, each independent of the others."""
+    start = time.monotonic()
+    agents = [_instantiate(role, model) for role in roles]
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(*(agent.run(client, api_key, context) for agent in agents))
+    return list(results), int((time.monotonic() - start) * 1000)
+
+
 async def orchestrate(api_key: str, model: str, pattern_description: str) -> OrchestrationResult:
     """
-    Real orchestration: one planning call decides the roster (from all 25
-    real agents across 8 categories), then every selected sub-agent runs
-    CONCURRENTLY via asyncio.gather — genuinely parallel independent work
-    (LLM calls, web searches, and local computation mixed freely), not
+    Real AI-planned orchestration: one planning call decides the roster
+    (from all 25 real agents across 8 categories), then every selected
+    sub-agent runs CONCURRENTLY — genuinely parallel independent work, not
     sequential, not one combined call pretending to be several agents.
     """
     start = time.monotonic()
     async with httpx.AsyncClient() as client:
         selected_roles, reasoning, plan_error = await _plan(client, api_key, model, pattern_description)
 
-        # Copy each template agent (dataclasses.replace) rather than mutating
-        # the shared ALL_AGENTS singletons — those are module-level and
-        # reused across every request, so mutating .model in place would race
-        # between concurrent requests using different models. Both Agent and
-        # SearchAgent carry a `model` field; ComputeAgent doesn't (no LLM call
-        # at all), so it's used as-is — nothing to swap.
-        agents = [
-            replace(ALL_AGENTS[role], model=model) if hasattr(ALL_AGENTS[role], "model") else ALL_AGENTS[role]
-            for role in selected_roles
-        ]
-
-        # This is the actual concurrency: every agent's run() coroutine is
-        # scheduled at once and they execute in parallel — LLM calls, a real
-        # web search, and real local computation all racing together, each
-        # independent of the others.
-        results = await asyncio.gather(
-            *(agent.run(client, api_key, pattern_description) for agent in agents)
-        )
-
+    results, _ = await _run_many(api_key, model, selected_roles, pattern_description)
     total_duration_ms = int((time.monotonic() - start) * 1000)
     return OrchestrationResult(
         pattern_description=pattern_description,
         plan_reasoning=reasoning,
         selected_roles=selected_roles,
-        sub_agent_results=list(results),
+        sub_agent_results=results,
         total_duration_ms=total_duration_ms,
         plan_error=plan_error,
         role_categories={role: ROLE_CATEGORY.get(role, "") for role in selected_roles},
     )
+
+
+async def orchestrate_custom(api_key: str, model: str, roles: list[str], context: str) -> OrchestrationResult:
+    """
+    Real USER-planned orchestration: no planner call at all — the caller IS
+    the planner, hand-picking exactly which agents to run. Still genuinely
+    concurrent via the same asyncio.gather path as the AI-planned version;
+    only the selection step differs.
+    """
+    unknown = [r for r in roles if r not in ALL_AGENTS]
+    if unknown:
+        raise ValueError(f"Unknown agent role(s): {', '.join(unknown)}")
+    if not roles:
+        raise ValueError("Pick at least one agent to run.")
+    if len(roles) > 12:
+        raise ValueError("Pick at most 12 agents for one run.")
+
+    results, total_duration_ms = await _run_many(api_key, model, roles, context)
+    return OrchestrationResult(
+        pattern_description=context,
+        plan_reasoning="You picked this roster yourself — no planner ran.",
+        selected_roles=roles,
+        sub_agent_results=results,
+        total_duration_ms=total_duration_ms,
+        plan_error=None,
+        role_categories={role: ROLE_CATEGORY.get(role, "") for role in roles},
+    )
+
+
+async def run_single(api_key: str, model: str, role: str, context: str) -> AgentResult:
+    """Runs exactly one named agent on its own — no planner, no other agents.
+    The 'individually' half of playing with the roster."""
+    if role not in ALL_AGENTS:
+        raise ValueError(f"Unknown agent role: {role}")
+    agent = _instantiate(role, model)
+    async with httpx.AsyncClient() as client:
+        return await agent.run(client, api_key, context)

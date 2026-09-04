@@ -28,12 +28,15 @@ const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL as string | undefined)?.re
 
 export class BackendError extends Error {}
 
+export type BackendCitation = { title: string; url: string }
+
 export type SubAgentOutput = {
   agentName: string
   role: string
   output: string
   durationMs: number
   error: string | null
+  citations: BackendCitation[]
 }
 
 export type OrchestrationResult = {
@@ -60,6 +63,7 @@ export type ScheduledJob = {
   lastRunAt: number | null
   lastOutput: string | null
   lastError: string | null
+  lastCitations: BackendCitation[]
   needsKey: boolean
 }
 
@@ -113,6 +117,24 @@ async function backendFetch(path: string, init?: RequestInit): Promise<Response>
  * the way the browser-only Mistral calls are, since the whole point is real
  * server-side concurrency a static page cannot provide.
  */
+function orchestrationResultFromJson(json: Record<string, unknown>): OrchestrationResult {
+  return {
+    planReasoning: (json.plan_reasoning as string) ?? '',
+    planError: (json.plan_error as string) ?? null,
+    selectedRoles: (json.selected_roles as string[]) ?? [],
+    roleCategories: (json.role_categories as Record<string, string>) ?? {},
+    subAgents: ((json.sub_agents as Record<string, unknown>[]) ?? []).map((s) => ({
+      agentName: s.agent_name as string,
+      role: s.role as string,
+      output: s.output as string,
+      durationMs: s.duration_ms as number,
+      error: (s.error as string) ?? null,
+      citations: ((s.citations as Record<string, unknown>[]) ?? []).map((c) => ({ title: c.title as string, url: c.url as string })),
+    })),
+    totalDurationMs: (json.total_duration_ms as number) ?? 0,
+  }
+}
+
 export async function orchestratePattern(patternDescription: string, signal?: AbortSignal): Promise<OrchestrationResult> {
   const apiKey = keyStore.get()
   if (!apiKey) throw new BackendError('Add a Mistral key in Settings first — the backend needs it to run the sub-agents.')
@@ -127,21 +149,45 @@ export async function orchestratePattern(patternDescription: string, signal?: Ab
     }),
     signal,
   })
+  return orchestrationResultFromJson(await res.json())
+}
 
+/**
+ * You are the planner: runs exactly the agents you pick, concurrently, with
+ * no AI planning call at all — the "plug and play your own orchestra" mode.
+ */
+export async function orchestrateCustom(roles: string[], context: string, signal?: AbortSignal): Promise<OrchestrationResult> {
+  const apiKey = keyStore.get()
+  if (!apiKey) throw new BackendError('Add a Mistral key in Settings first — the backend needs it to run the sub-agents.')
+
+  const res = await backendFetch('/orchestrate-custom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roles, context, mistral_api_key: apiKey, model: keyStore.model() }),
+    signal,
+  })
+  return orchestrationResultFromJson(await res.json())
+}
+
+/** Runs exactly one named agent on its own — no planner, no other agents. The "individually" mode. */
+export async function runSingleAgent(role: string, context: string, signal?: AbortSignal): Promise<SubAgentOutput> {
+  const apiKey = keyStore.get()
+  if (!apiKey) throw new BackendError('Add a Mistral key in Settings first — the agent needs it to run.')
+
+  const res = await backendFetch(`/agent/${encodeURIComponent(role)}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context, mistral_api_key: apiKey, model: keyStore.model() }),
+    signal,
+  })
   const json = await res.json()
   return {
-    planReasoning: json.plan_reasoning ?? '',
-    planError: json.plan_error ?? null,
-    selectedRoles: json.selected_roles ?? [],
-    roleCategories: json.role_categories ?? {},
-    subAgents: (json.sub_agents ?? []).map((s: Record<string, unknown>) => ({
-      agentName: s.agent_name,
-      role: s.role,
-      output: s.output,
-      durationMs: s.duration_ms,
-      error: s.error ?? null,
-    })),
-    totalDurationMs: json.total_duration_ms ?? 0,
+    agentName: json.agent_name,
+    role: json.role,
+    output: json.output,
+    durationMs: json.duration_ms,
+    error: json.error ?? null,
+    citations: (json.citations ?? []).map((c: Record<string, unknown>) => ({ title: c.title, url: c.url })),
   }
 }
 
@@ -165,6 +211,7 @@ function jobFromJson(j: Record<string, unknown>): ScheduledJob {
     lastRunAt: (j.last_run_at as number) ?? null,
     lastOutput: (j.last_output as string) ?? null,
     lastError: (j.last_error as string) ?? null,
+    lastCitations: ((j.last_citations as Record<string, unknown>[]) ?? []).map((c) => ({ title: c.title as string, url: c.url as string })),
     needsKey: Boolean(j.needs_key),
   }
 }

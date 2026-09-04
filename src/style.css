@@ -402,6 +402,17 @@ h1, h2, h3, p { margin: 0; }
 .schedule-card-warning { color: var(--warn); font-size: 12px; margin-top: 10px; }
 .schedule-delete { display: block; margin-top: 10px; font-size: 11.5px; color: var(--bad); }
 
+.playground-modes { display: flex; gap: 8px; margin: 20px 0 16px; }
+.playground-solo-result { margin-top: 18px; }
+
+.playground-picker { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.playground-category { border: 1px solid #34342e; background: var(--panel); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.playground-checkbox { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+.playground-checkbox input { margin-top: 3px; accent-color: var(--lime); }
+.playground-checkbox span { display: flex; flex-direction: column; gap: 2px; }
+.playground-checkbox b { font: 600 13px 'Space Grotesk'; }
+.playground-checkbox small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+
 .evolve-screen { max-width: 940px; }
 .agent-full { margin-top: 26px; border: 1px solid #4c4c42; border-radius: 10px; background: var(--panel); overflow: hidden; }
 .af-head { padding: 16px 20px; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px; font: 600 15px 'Space Grotesk'; }
@@ -454,6 +465,13 @@ h1, h2, h3, p { margin: 0; }
 .coach-citations { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .coach-citations a { font: 10px 'DM Mono'; color: var(--blue); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .coach-citations a:hover { text-decoration: underline; }
+
+.citations { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.citation-link { display: block; font: 11.5px 'DM Mono'; color: var(--blue); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citation-link:hover { text-decoration: underline; }
+.citation-yt { border: 1px solid #2f2f2a; border-radius: 6px; overflow: hidden; padding-bottom: 6px; }
+.citation-yt iframe { display: block; border-radius: 6px 6px 0 0; }
+.citation-yt .citation-link { padding: 6px 10px 0; }
 .dots { display: flex; gap: 4px; }
 .dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); animation: blink 1.2s infinite; }
 .dots span:nth-child(2) { animation-delay: .2s; }

@@ -34,7 +34,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from agents.orchestrator import orchestrate
+from agents.orchestrator import orchestrate, orchestrate_custom, run_single
 from agents.roster import ALL_AGENTS, CATEGORIES
 from scheduler import store as schedule_store
 from commitments import store as commitment_store
@@ -67,12 +67,18 @@ class OrchestrateRequest(BaseModel):
     model: str = Field(default="mistral-small-latest")
 
 
+class CitationResponse(BaseModel):
+    title: str
+    url: str
+
+
 class SubAgentResponse(BaseModel):
     agent_name: str
     role: str
     output: str
     duration_ms: int
     error: str | None = None
+    citations: list[CitationResponse] = []
 
 
 class OrchestrateResponse(BaseModel):
@@ -131,10 +137,78 @@ async def orchestrate_pattern(req: OrchestrateRequest) -> OrchestrateResponse:
             SubAgentResponse(
                 agent_name=r.agent_name, role=r.role, output=r.output,
                 duration_ms=r.duration_ms, error=r.error,
+                citations=[CitationResponse(title=c.title, url=c.url) for c in r.citations],
             )
             for r in result.sub_agent_results
         ],
         total_duration_ms=result.total_duration_ms,
+    )
+
+
+# ---- Play with the roster directly: run one agent solo, or hand-pick your
+# own multi-agent "orchestra" with no AI planner in the loop at all. Both
+# reuse the exact same real asyncio.gather concurrency as /orchestrate —
+# only the selection step differs (AI-picked vs. you-picked vs. just one).
+
+
+class CustomOrchestrateRequest(BaseModel):
+    roles: list[str] = Field(..., min_length=1, max_length=12)
+    context: str = Field(..., min_length=1, max_length=2000)
+    mistral_api_key: str = Field(..., min_length=10)
+    model: str = Field(default="mistral-small-latest")
+
+
+@app.post("/orchestrate-custom", response_model=OrchestrateResponse)
+async def orchestrate_pattern_custom(req: CustomOrchestrateRequest) -> OrchestrateResponse:
+    """You are the planner: runs exactly the agents you picked, concurrently,
+    no AI planning call at all."""
+    try:
+        result = await orchestrate_custom(
+            api_key=req.mistral_api_key, model=req.model, roles=req.roles, context=req.context,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - this endpoint must never 500 opaquely
+        raise HTTPException(status_code=502, detail=f"Orchestration failed: {exc}") from exc
+
+    return OrchestrateResponse(
+        plan_reasoning=result.plan_reasoning,
+        plan_error=result.plan_error,
+        selected_roles=result.selected_roles,
+        role_categories=result.role_categories or {},
+        sub_agents=[
+            SubAgentResponse(
+                agent_name=r.agent_name, role=r.role, output=r.output, duration_ms=r.duration_ms, error=r.error,
+                citations=[CitationResponse(title=c.title, url=c.url) for c in r.citations],
+            )
+            for r in result.sub_agent_results
+        ],
+        total_duration_ms=result.total_duration_ms,
+    )
+
+
+class RunSingleAgentRequest(BaseModel):
+    context: str = Field(..., min_length=1, max_length=2000)
+    mistral_api_key: str = Field(..., min_length=10)
+    model: str = Field(default="mistral-small-latest")
+
+
+@app.post("/agent/{role}/run", response_model=SubAgentResponse)
+async def run_one_agent(role: str, req: RunSingleAgentRequest) -> SubAgentResponse:
+    """Runs exactly one named agent on its own — no planner, no other agents.
+    This is 'individually' in the roster: pick one, give it your own input,
+    see its real, standalone output."""
+    if role not in ALL_AGENTS:
+        raise HTTPException(status_code=404, detail=f"No such agent role: {role}")
+    try:
+        result = await run_single(api_key=req.mistral_api_key, model=req.model, role=role, context=req.context)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Agent run failed: {exc}") from exc
+    return SubAgentResponse(
+        agent_name=result.agent_name, role=result.role, output=result.output, duration_ms=result.duration_ms, error=result.error,
+        citations=[CitationResponse(title=c.title, url=c.url) for c in result.citations],
     )
 
 
@@ -171,6 +245,7 @@ class ScheduledJobResponse(BaseModel):
     last_run_at: float | None
     last_output: str | None
     last_error: str | None
+    last_citations: list[CitationResponse] = []
     needs_key: bool
 
 
@@ -181,6 +256,7 @@ def _job_to_response(job) -> ScheduledJobResponse:
         category=job.category(), label=job.label, interval_minutes=job.interval_minutes,
         context=job.context, created_at=job.created_at, last_run_at=job.last_run_at,
         last_output=job.last_output, last_error=job.last_error, needs_key=job.needs_key,
+        last_citations=[CitationResponse(title=c["title"], url=c["url"]) for c in (job.last_citations or [])],
     )
 
 

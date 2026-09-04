@@ -54,6 +54,10 @@ class ScheduledJob:
     last_run_at: Optional[float] = None
     last_output: Optional[str] = None
     last_error: Optional[str] = None
+    # Real citations (title + url) from the last run, when the agent is a
+    # SearchAgent — e.g. a scheduled News-Digest's actual sources, not just
+    # the summarized text. Empty for every other agent kind.
+    last_citations: list = field(default_factory=list)
     needs_key: bool = True
 
     def to_persisted_dict(self) -> dict:
@@ -139,6 +143,7 @@ class JobStore:
             result = asyncio.run(_do_run())
             job.last_output = result.output
             job.last_error = result.error
+            job.last_citations = [{"title": c.title, "url": c.url} for c in result.citations]
         except Exception as exc:  # noqa: BLE001 - a scheduled run failing must not kill the scheduler thread
             job.last_error = f"{type(exc).__name__}: {exc}"
         job.last_run_at = started

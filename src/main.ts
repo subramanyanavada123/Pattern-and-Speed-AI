@@ -13,7 +13,8 @@ import {
   orchestratePattern, isBackendUp, knownBackendState, BackendError, type OrchestrationResult,
   fetchRoster, createSchedule, listSchedules, resumeSchedule, deleteSchedule,
   createCommitment, listCommitments, resolveCommitment,
-  type RosterCategories, type ScheduledJob, type Commitment,
+  orchestrateCustom, runSingleAgent,
+  type RosterCategories, type ScheduledJob, type Commitment, type SubAgentOutput,
 } from './backend'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -58,7 +59,17 @@ let teamResult: OrchestrationResult | null = null
 let teamBackendChecked = false
 
 // ---- Team sub-tab (spawn once vs. schedule real recurring runs) + live roster
-let teamTab: 'spawn' | 'schedule' = 'spawn'
+let teamTab: 'spawn' | 'schedule' | 'playground' = 'spawn'
+// Playground: play with the 25-agent roster directly — run one solo, or
+// hand-pick your own multi-agent orchestra, no AI planner involved either way.
+let playgroundMode: 'solo' | 'custom' = 'solo'
+let playgroundSoloRole = ''
+let playgroundCustomRoles = new Set<string>()
+let playgroundContext = ''
+let playgroundBusy = false
+let playgroundError = ''
+let playgroundSoloResult: SubAgentOutput | null = null
+let playgroundCustomResult: OrchestrationResult | null = null
 let roster: RosterCategories | null = null
 let rosterLoading = false
 let schedules: ScheduledJob[] = []
@@ -111,6 +122,39 @@ const LESSON_PARTS: PartId[] = ['perceive', 'decide', 'act', 'learn']
 
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+}
+
+/** Extracts a YouTube video id from a watch/short/youtu.be URL, or null if it isn't one — real detection, not a guess. */
+function youtubeId(url: string): string | null {
+  try {
+    const u = new URL(url)
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1) || null
+    if (u.hostname.includes('youtube.com')) {
+      if (u.pathname === '/watch') return u.searchParams.get('v')
+      if (u.pathname.startsWith('/shorts/')) return u.pathname.split('/')[2] || null
+      if (u.pathname.startsWith('/embed/')) return u.pathname.split('/')[2] || null
+    }
+  } catch {
+    /* not a valid URL — not a YouTube link either */
+  }
+  return null
+}
+
+/** Renders an agent's real citations from Mistral's web_search tool — actual clickable links/titles, plus a real embedded player for any that are genuinely YouTube URLs (not a fake thumbnail). */
+function renderAgentCitations(citations: { title: string; url: string }[]): string {
+  if (!citations.length) return ''
+  return `<div class="citations">
+    ${citations.map((c) => {
+      const ytId = youtubeId(c.url)
+      if (ytId) {
+        return `<div class="citation citation-yt">
+          <iframe width="100%" height="180" src="https://www.youtube.com/embed/${esc(ytId)}" title="${esc(c.title)}" frameborder="0" allowfullscreen loading="lazy"></iframe>
+          <a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer" class="citation-link">${esc(c.title)}</a>
+        </div>`
+      }
+      return `<a class="citation citation-link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">🔗 ${esc(c.title)}</a>`
+    }).join('')}
+  </div>`
 }
 
 function showToast(msg: string) {
@@ -781,11 +825,13 @@ uvicorn main:app --reload --port 8787</pre>
       <div class="team-tabs">
         <button class="team-tab ${teamTab === 'spawn' ? 'active' : ''}" data-action="team-tab-spawn">Spawn once</button>
         <button class="team-tab ${teamTab === 'schedule' ? 'active' : ''}" data-action="team-tab-schedule">Schedule recurring ${schedules.length ? `(${schedules.length})` : ''}</button>
+        <button class="team-tab ${teamTab === 'playground' ? 'active' : ''}" data-action="team-tab-playground">Playground</button>
       </div>
     ` : ''}
 
     ${backendState && teamTab === 'spawn' ? renderTeamSpawnTab(description) : ''}
     ${backendState && teamTab === 'schedule' ? renderTeamScheduleTab(description) : ''}
+    ${backendState && teamTab === 'playground' ? renderTeamPlaygroundTab(description) : ''}
   </section>`
 }
 
@@ -819,7 +865,7 @@ function renderTeamResult(result: OrchestrationResult): string {
           <div class="team-card-head"><b>${esc(a.agentName)}</b><span>${a.durationMs}ms</span></div>
           ${category ? `<span class="team-card-category">${esc(category)}</span>` : ''}
           <p class="team-card-role">${esc(a.role)}</p>
-          ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>`}
+          ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>${renderAgentCitations(a.citations)}`}
           ${!a.error && role ? `
             <div class="team-card-actions">
               <button class="ghost-link team-card-schedule" data-action="team-schedule-this" data-role="${esc(role)}">Keep this one running →</button>
@@ -895,12 +941,122 @@ function renderTeamScheduleTab(description: string): string {
           ` : j.lastError ? `
             <p class="team-card-output team-card-output-error">✕ ${esc(j.lastError)}</p>
           ` : j.lastOutput ? `
-            <p class="team-card-output">${esc(j.lastOutput)}</p>
+            <p class="team-card-output">${esc(j.lastOutput)}</p>${renderAgentCitations(j.lastCitations)}
           ` : `<p class="lede small">First run in progress (a real LLM call or search can take a few seconds) — <button class="ghost-link schedule-inline-refresh" data-action="schedule-refresh">check now</button>.</p>`}
           <button class="ghost-link schedule-delete" data-action="schedule-delete" data-id="${esc(j.id)}">Cancel this schedule</button>
         </div>
       `).join('')}
     </div>
+  `
+}
+
+/**
+ * Play with the real roster directly: run exactly one agent solo (no
+ * planner, no other agents), or hand-pick your own multi-agent "orchestra"
+ * (checkboxes across all 25, no AI planning call — you ARE the planner).
+ * Both paths hit the real backend and real concurrency the same way the
+ * Spawn tab does; only the selection step differs.
+ */
+function renderTeamPlaygroundTab(description: string): string {
+  const roleOptions = roster
+    ? Object.entries(roster).flatMap(([category, agents]) => agents.map((a) => ({ category, ...a })))
+    : []
+  const contextValue = playgroundContext || description
+
+  return `
+    <p class="lede small">Skip the AI planner entirely — run one agent on its own, or check off any combination of the 25 to build your own real, concurrent team.</p>
+
+    <div class="playground-modes">
+      <button class="team-tab ${playgroundMode === 'solo' ? 'active' : ''}" data-action="playground-mode-solo">Run one agent</button>
+      <button class="team-tab ${playgroundMode === 'custom' ? 'active' : ''}" data-action="playground-mode-custom">Build my own orchestra</button>
+    </div>
+
+    <label class="schedule-field">
+      <span>Input (goes to every agent you run below)</span>
+      <textarea data-action="playground-context-input" rows="2" placeholder="e.g. lab report due tonight, also stuck 45 min on the intro">${esc(contextValue)}</textarea>
+    </label>
+
+    ${playgroundError ? `<p class="team-error">${esc(playgroundError)}</p>` : ''}
+
+    ${playgroundMode === 'solo' ? renderPlaygroundSolo(roleOptions) : renderPlaygroundCustom(roleOptions)}
+  `
+}
+
+function renderPlaygroundSolo(roleOptions: { category: string; key: string; name: string; role: string }[]): string {
+  const selected = roleOptions.find((r) => r.key === playgroundSoloRole) ?? roleOptions[0]
+
+  return `
+    <label class="schedule-field">
+      <span>Which agent</span>
+      <select data-action="playground-solo-select">
+        ${roleOptions.map((r) => `<option value="${esc(r.key)}" ${r.key === (selected?.key ?? '') ? 'selected' : ''}>${esc(r.category)} — ${esc(r.name)}</option>`).join('')}
+      </select>
+    </label>
+    ${selected ? `<p class="schedule-role-desc">${esc(selected.role)}</p>` : ''}
+
+    <button class="primary-action ${playgroundBusy ? 'disabled' : ''}" data-action="playground-run-solo" ${playgroundBusy ? 'disabled' : ''}>
+      ${playgroundBusy ? 'Running…' : 'Run this agent'} <span>→</span>
+    </button>
+
+    ${playgroundSoloResult ? `
+      <div class="team-grid playground-solo-result">
+        <div class="team-card ${playgroundSoloResult.error ? 'team-card-error' : ''}">
+          <div class="team-card-head"><b>${esc(playgroundSoloResult.agentName)}</b><span>${playgroundSoloResult.durationMs}ms</span></div>
+          <p class="team-card-role">${esc(playgroundSoloResult.role)}</p>
+          ${playgroundSoloResult.error
+            ? `<p class="team-card-output team-card-output-error">✕ ${esc(playgroundSoloResult.error)}</p>`
+            : `<p class="team-card-output">${esc(playgroundSoloResult.output)}</p>${renderAgentCitations(playgroundSoloResult.citations)}`}
+        </div>
+      </div>
+    ` : ''}
+  `
+}
+
+function renderPlaygroundCustom(roleOptions: { category: string; key: string; name: string; role: string }[]): string {
+  const byCategory: Record<string, typeof roleOptions> = {}
+  for (const r of roleOptions) (byCategory[r.category] ??= []).push(r)
+
+  return `
+    <div class="playground-picker">
+      ${Object.entries(byCategory).map(([category, agents]) => `
+        <div class="playground-category">
+          <span class="eyebrow">${esc(category)}</span>
+          ${agents.map((a) => `
+            <label class="playground-checkbox">
+              <input type="checkbox" data-action="playground-toggle-role" data-role="${esc(a.key)}" ${playgroundCustomRoles.has(a.key) ? 'checked' : ''} />
+              <span><b>${esc(a.name)}</b><small>${esc(a.role)}</small></span>
+            </label>
+          `).join('')}
+        </div>
+      `).join('')}
+    </div>
+
+    <button class="primary-action ${playgroundBusy || playgroundCustomRoles.size === 0 ? 'disabled' : ''}" data-action="playground-run-custom" ${playgroundBusy || playgroundCustomRoles.size === 0 ? 'disabled' : ''}>
+      ${playgroundBusy ? 'Running…' : `Run my team of ${playgroundCustomRoles.size} →`}
+    </button>
+
+    ${playgroundCustomResult ? `
+      <div class="team-result">
+        <div class="team-plan">
+          <span class="eyebrow">YOU PICKED THIS ROSTER</span>
+          <p>${esc(playgroundCustomResult.planReasoning)}</p>
+          <p class="team-timing">${playgroundCustomResult.selectedRoles.length} agent${playgroundCustomResult.selectedRoles.length === 1 ? '' : 's'} · ran in ${playgroundCustomResult.totalDurationMs}ms total (concurrently, not summed)</p>
+        </div>
+        <div class="team-grid">
+          ${playgroundCustomResult.subAgents.map((a, i) => {
+            const role = playgroundCustomResult!.selectedRoles[i]
+            const category = role ? playgroundCustomResult!.roleCategories[role] : ''
+            return `
+            <div class="team-card ${a.error ? 'team-card-error' : ''}">
+              <div class="team-card-head"><b>${esc(a.agentName)}</b><span>${a.durationMs}ms</span></div>
+              ${category ? `<span class="team-card-category">${esc(category)}</span>` : ''}
+              <p class="team-card-role">${esc(a.role)}</p>
+              ${a.error ? `<p class="team-card-output team-card-output-error">✕ ${esc(a.error)}</p>` : `<p class="team-card-output">${esc(a.output)}</p>${renderAgentCitations(a.citations)}`}
+            </div>
+          `}).join('')}
+        </div>
+      </div>
+    ` : ''}
   `
 }
 
@@ -1408,6 +1564,9 @@ app.addEventListener('click', async (event) => {
     teamTab = 'spawn'
     roster = null
     scheduleError = ''
+    playgroundError = ''
+    playgroundSoloResult = null
+    playgroundCustomResult = null
     go('team')
     return
   }
@@ -1422,6 +1581,22 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'team-tab-spawn') { teamTab = 'spawn'; render(); return }
   if (action === 'team-tab-schedule') { teamTab = 'schedule'; render(); return }
+  if (action === 'team-tab-playground') { teamTab = 'playground'; render(); return }
+  if (action === 'playground-mode-solo') { playgroundMode = 'solo'; render(); return }
+  if (action === 'playground-mode-custom') { playgroundMode = 'custom'; render(); return }
+  if (action === 'playground-toggle-role') {
+    const role = actionEl?.dataset.role
+    if (role) {
+      const next = new Set(playgroundCustomRoles)
+      if (next.has(role)) next.delete(role)
+      else next.add(role)
+      playgroundCustomRoles = next
+      render()
+    }
+    return
+  }
+  if (action === 'playground-run-solo') { await doPlaygroundRunSolo(); return }
+  if (action === 'playground-run-custom') { await doPlaygroundRunCustom(); return }
   if (action === 'team-schedule-this') {
     const role = actionEl?.dataset.role
     if (role) scheduleFormRole = role
@@ -1670,6 +1845,7 @@ app.addEventListener('input', (event) => {
   const action = el.dataset?.action
   if (action === 'schedule-label-input') scheduleFormLabel = (el as HTMLInputElement).value
   if (action === 'schedule-context-input') scheduleFormContext = (el as HTMLTextAreaElement).value
+  if (action === 'playground-context-input') playgroundContext = (el as HTMLTextAreaElement).value
 })
 
 // select fields for the schedule form — 'change' fires reliably for <select>, unlike 'input' in some browsers
@@ -1678,6 +1854,7 @@ app.addEventListener('change', (event) => {
   const action = el.dataset?.action
   if (action === 'schedule-role-select') { scheduleFormRole = (el as HTMLSelectElement).value; render() }
   if (action === 'schedule-interval-select') scheduleFormInterval = Number((el as HTMLSelectElement).value)
+  if (action === 'playground-solo-select') { playgroundSoloRole = (el as HTMLSelectElement).value; render() }
 })
 
 /**
@@ -1841,6 +2018,45 @@ async function doRunTeam() {
  * bar, no pretending to control anything outside this app — completion is
  * an honest self-report, surfaced on Home so it's not buried in Team.
  */
+async function doPlaygroundRunSolo() {
+  if (playgroundBusy) return
+  const roleOptions = roster ? Object.entries(roster).flatMap(([category, agents]) => agents.map((a) => ({ category, ...a }))) : []
+  const role = playgroundSoloRole || roleOptions[0]?.key
+  if (!role) { playgroundError = 'No roster loaded yet — check the backend connection.'; render(); return }
+  const p = getPattern(workingPatternId)
+  const context = playgroundContext.trim() || (p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`)
+
+  playgroundBusy = true
+  playgroundError = ''
+  render()
+  try {
+    playgroundSoloResult = await runSingleAgent(role, context)
+  } catch (e) {
+    playgroundError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not run that agent.'
+  } finally {
+    playgroundBusy = false
+    render()
+  }
+}
+
+async function doPlaygroundRunCustom() {
+  if (playgroundBusy || playgroundCustomRoles.size === 0) return
+  const p = getPattern(workingPatternId)
+  const context = playgroundContext.trim() || (p.custom && p.sourceDescription ? p.sourceDescription : `${p.title}: ${p.trigger} → ${p.routine} → ${p.reward}`)
+
+  playgroundBusy = true
+  playgroundError = ''
+  render()
+  try {
+    playgroundCustomResult = await orchestrateCustom(Array.from(playgroundCustomRoles), context)
+  } catch (e) {
+    playgroundError = e instanceof BackendError ? e.message : e instanceof Error ? e.message : 'Could not run your custom team.'
+  } finally {
+    playgroundBusy = false
+    render()
+  }
+}
+
 async function doStartCommitmentTimer(subAgentIdx: number) {
   if (!teamResult) return
   const agent = teamResult.subAgents[subAgentIdx]

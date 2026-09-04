@@ -23,7 +23,7 @@ response, and the frontend don't need to know which kind ran.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 import httpx
@@ -37,6 +37,12 @@ class AgentError(Exception):
 
 
 @dataclass
+class Citation:
+    title: str
+    url: str
+
+
+@dataclass
 class AgentResult:
     agent_name: str
     role: str
@@ -44,6 +50,11 @@ class AgentResult:
     started_at: float
     finished_at: float
     error: str | None = None
+    # Real citations (title + url) from Mistral's web_search tool — only
+    # ever populated by SearchAgent; every other agent leaves this empty
+    # rather than fabricating a source. This is what actually lets the
+    # frontend render a clickable link/thumbnail instead of plain prose.
+    citations: list[Citation] = field(default_factory=list)
 
     @property
     def duration_ms(self) -> int:
@@ -227,8 +238,14 @@ class SearchAgent:
 
         # The Conversations API response shape is still evolving (beta) —
         # parse defensively across the plausible output shapes, same
-        # tolerance src/mistral.ts's searchWeb() already applies.
+        # tolerance src/mistral.ts's searchWeb() already applies. Citation
+        # chunks (type "tool_reference") are what actually let the frontend
+        # render a real clickable link instead of plain prose — dropping
+        # them (the previous bug here) meant every search result looked
+        # like flat text even when Mistral genuinely found real sources.
         text_parts: list[str] = []
+        citations: list[Citation] = []
+        seen_urls: set[str] = set()
         for output in body.get("outputs", []) or []:
             content = output.get("content")
             if isinstance(content, str):
@@ -237,8 +254,18 @@ class SearchAgent:
                 for chunk in content:
                     if isinstance(chunk, str):
                         text_parts.append(chunk)
-                    elif isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    if isinstance(chunk.get("text"), str):
                         text_parts.append(chunk["text"])
+                    if chunk.get("type") == "tool_reference" and isinstance(chunk.get("url"), str):
+                        url = chunk["url"]
+                        if url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        title = chunk.get("title") if isinstance(chunk.get("title"), str) else url
+                        citations.append(Citation(title=title, url=url))
 
         text = "".join(text_parts).strip()
         if not text:
@@ -247,7 +274,10 @@ class SearchAgent:
                 started_at=started, finished_at=finished,
                 error="Mistral web search returned no readable text.",
             )
-        return AgentResult(agent_name=self.name, role=self.role, output=text, started_at=started, finished_at=finished)
+        return AgentResult(
+            agent_name=self.name, role=self.role, output=text,
+            started_at=started, finished_at=finished, citations=citations,
+        )
 
 
 def extract_error_detail(response: httpx.Response) -> str:
